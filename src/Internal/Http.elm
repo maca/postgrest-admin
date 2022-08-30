@@ -15,8 +15,6 @@ import Json.Decode as Decode exposing (Decoder, Value)
 type Error
     = HttpError Http.Error
     | DecodeError Decode.Error
-    | BadSchema String
-    | AutocompleteError String
     | RequestError String
     | ExpectedRecord
     | ExpectedRecordList
@@ -109,12 +107,6 @@ errorToString error =
 
         DecodeError err ->
             Decode.errorToString err
-
-        BadSchema msg ->
-            msg
-
-        AutocompleteError msg ->
-            msg
 
         RequestError msg ->
             msg
