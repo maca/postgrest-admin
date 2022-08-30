@@ -121,4 +121,4 @@ errorToString error =
             "No Error"
 
         AuthError ->
-            "Auth Error"
+            "There was an error authorising your credentials."
