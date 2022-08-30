@@ -93,19 +93,19 @@ errorToString error =
         HttpError httpError ->
             case httpError of
                 Http.BadUrl msg ->
-                    msg
+                    "Invalid URL:" ++ msg
 
                 Http.Timeout ->
-                    "Request Timeout"
+                    "The requested timed out. Please try again."
 
                 Http.NetworkError ->
-                    "Network Error"
+                    "Network Error: do you have an internet connection?"
 
                 Http.BadStatus status ->
                     "Bad status: " ++ (status |> String.fromInt)
 
                 Http.BadBody msg ->
-                    msg
+                    "Response error: " ++ msg
 
         DecodeError err ->
             Decode.errorToString err
