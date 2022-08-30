@@ -149,8 +149,10 @@ update msg (PageDetail params) =
         GotCount _ _ ->
             ( PageDetail params, AppCmd.none )
 
-        Fetched (Err _) ->
-            ( PageDetail params, AppCmd.none )
+        Fetched (Err err) ->
+            ( PageDetail params
+            , Notification.error (Internal.Http.errorToString err)
+            )
 
         Deleted (Ok _) ->
             ( PageDetail params
@@ -162,8 +164,10 @@ update msg (PageDetail params) =
                 ]
             )
 
-        Deleted (Err _) ->
-            ( PageDetail params, AppCmd.none )
+        Deleted (Err err) ->
+            ( PageDetail params
+            , Notification.error (Internal.Http.errorToString err)
+            )
 
         DeleteModalOpened ->
             ( PageDetail { params | confirmDelete = True }, AppCmd.none )

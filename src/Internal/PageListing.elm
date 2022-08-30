@@ -318,8 +318,8 @@ update msg listing =
         ParentFetched (Ok parent) ->
             ( { listing | parent = Just parent }, AppCmd.none )
 
-        ParentFetched (Err _) ->
-            ( listing, AppCmd.none )
+        ParentFetched (Err err) ->
+            ( listing, Notification.error (Internal.Http.errorToString err) )
 
         RecordLinkClicked tableName id ->
             ( listing
@@ -378,7 +378,9 @@ update msg listing =
                         )
 
                 Err _ ->
-                    ( listing, AppCmd.none )
+                    ( listing
+                    , Notification.error "Dom element not found"
+                    )
 
         SearchChanged searchMsg ->
             Search.update searchMsg listing.search
@@ -426,8 +428,8 @@ update msg listing =
                 |> AppCmd.wrap
             )
 
-        Downloaded (Err _) ->
-            ( listing, AppCmd.none )
+        Downloaded (Err err) ->
+            ( listing, Notification.error (Internal.Http.errorToString err) )
 
         CsvUploadRequested ->
             ( listing
@@ -521,8 +523,8 @@ update msg listing =
                 ]
             )
 
-        CsvUploadPosted (Err _) ->
-            ( listing, AppCmd.none )
+        CsvUploadPosted (Err err) ->
+            ( listing, Notification.error (Internal.Http.errorToString err) )
 
         CsvUploadAccepted ->
             ( listing

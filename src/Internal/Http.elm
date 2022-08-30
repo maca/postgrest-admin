@@ -90,16 +90,43 @@ toError result =
 errorToString : Error -> String
 errorToString error =
     case error of
-        HttpError _ ->
-            "Something went wrong with the connection, please try again later"
+        HttpError httpError ->
+            case httpError of
+                Http.BadUrl msg ->
+                    msg
+
+                Http.Timeout ->
+                    "Request Timeout"
+
+                Http.NetworkError ->
+                    "Network Error"
+
+                Http.BadStatus status ->
+                    "Bad status: " ++ (status |> String.fromInt)
+
+                Http.BadBody msg ->
+                    msg
 
         DecodeError err ->
             Decode.errorToString err
 
-        _ ->
-            genericError
+        BadSchema msg ->
+            msg
 
+        AutocompleteError msg ->
+            msg
 
-genericError : String
-genericError =
-    "Something went wrong, we'll fix soon"
+        RequestError msg ->
+            msg
+
+        ExpectedRecord ->
+            "Expected a record"
+
+        ExpectedRecordList ->
+            "Expected a list of records"
+
+        NoError ->
+            "No Error"
+
+        AuthError ->
+            "Auth Error"

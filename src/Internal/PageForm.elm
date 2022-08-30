@@ -149,14 +149,16 @@ update msg (PageForm params) =
             , AppCmd.none
             )
 
-        Fetched (Err _) ->
-            ( PageForm params, AppCmd.none )
+        Fetched (Err err) ->
+            ( PageForm params, Notification.error (Internal.Http.errorToString err) )
 
         ParentFetched (Ok parent) ->
             ( PageForm { params | parent = Just parent }, AppCmd.none )
 
-        ParentFetched (Err _) ->
-            ( PageForm params, AppCmd.none )
+        ParentFetched (Err err) ->
+            ( PageForm params
+            , Notification.error (Internal.Http.errorToString err)
+            )
 
         Saved (Ok record) ->
             ( PageForm params
@@ -172,8 +174,10 @@ update msg (PageForm params) =
                 ]
             )
 
-        Saved (Err _) ->
-            ( PageForm params, AppCmd.none )
+        Saved (Err err) ->
+            ( PageForm params
+            , Notification.error (Internal.Http.errorToString err)
+            )
 
         InputChanged inputMsg ->
             let

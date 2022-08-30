@@ -357,7 +357,7 @@ label {
 
 .notification p {
     margin-top: 0.4rem;
-    padding-right: 4rem;
+    padding: 1rem 2rem;
 }
 
 .notification.confirmation {
