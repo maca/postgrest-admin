@@ -35,8 +35,9 @@ import Internal.Record as Record exposing (Record)
 import Internal.Schema exposing (Constraint(..), ForeignKeyParams)
 import Internal.Value as Value exposing (Value(..))
 import Maybe.Extra as Maybe
-import Postgrest.Client as PG exposing (PostgrestErrorJSON)
 import PostgRestAdmin.Client as Client exposing (Client)
+import PostgRestAdmin.Notification as Notification
+import Postgrest.Client as PG exposing (PostgrestErrorJSON)
 import String.Extra as String
 import Url.Builder as Url
 import Utils.Task exposing (Error(..))
@@ -148,8 +149,10 @@ update client msg record =
                 _ ->
                     ( record, AppCmd.none )
 
-        ListingFetched _ (Err _) ->
-            ( record, AppCmd.none )
+        ListingFetched _ (Err err) ->
+            ( record
+            , Notification.error (Utils.Task.errorToString err)
+            )
 
 
 mapField : (Field -> Field) -> Input -> Input

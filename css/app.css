@@ -340,9 +340,9 @@ label {
     justify-content: flex-end;
 }
 
-.notification p {
+.notification pre {
     margin-top: 0.4rem;
-    padding-right: 4rem;
+    padding: 1rem 2rem;
 }
 
 .notification.confirmation {

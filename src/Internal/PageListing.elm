@@ -303,8 +303,10 @@ update msg listing =
                         , AppCmd.none
                         )
 
-                Err _ ->
-                    ( listing, AppCmd.none )
+                Err err ->
+                    ( listing
+                    , Notification.error (Utils.Task.errorToString (DomError err))
+                    )
 
         SearchChanged searchMsg ->
             Search.update searchMsg listing.search
@@ -380,8 +382,10 @@ update msg listing =
                         }
                     )
 
-                Err _ ->
-                    ( listing, AppCmd.none )
+                Err err ->
+                    ( listing
+                    , Notification.error (Utils.Task.errorToString (ParserError err))
+                    )
 
         CsvUploadPosted (Ok count) ->
             ( listing
@@ -394,11 +398,15 @@ update msg listing =
                 ]
             )
 
-        CsvUploadPosted (Err _) ->
-            ( listing, AppCmd.none )
+        CsvUploadPosted (Err err) ->
+            ( listing
+            , Notification.error (Utils.Task.errorToString err)
+            )
 
-        FetchFailed _ ->
-            ( listing, AppCmd.none )
+        FetchFailed err ->
+            ( listing
+            , Notification.error (Utils.Task.errorToString err)
+            )
 
 
 listingPath : PageListing -> String
