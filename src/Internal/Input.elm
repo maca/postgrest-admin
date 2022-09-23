@@ -33,6 +33,7 @@ import Internal.Http exposing (Error(..))
 import Internal.Record as Record exposing (Record)
 import Internal.Schema exposing (Constraint(..), ForeignKeyParams)
 import Internal.Value as Value exposing (Value(..))
+import Json.Decode as Decode
 import Maybe.Extra as Maybe
 import PostgRestAdmin.Client as Client exposing (Client, Collection)
 import Postgrest.Client as PG
@@ -257,7 +258,22 @@ fromFieldWithValue field =
             Date field
 
         PJson _ ->
-            TextArea field
+            TextArea
+                (Field.setValidation
+                    (\value ->
+                        Value.toString value
+                            |> Maybe.andThen
+                                (\v ->
+                                    case Decode.decodeString Decode.value v of
+                                        Ok _ ->
+                                            Nothing
+
+                                        Err err ->
+                                            Just (Decode.errorToString err)
+                                )
+                    )
+                    field
+                )
 
         Unknown _ ->
             Blank field

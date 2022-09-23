@@ -132,8 +132,8 @@ value fieldName { fields } =
                     PDate (Just val) ->
                         Just (RPosix val)
 
-                    PJson val ->
-                        Just (RValue val)
+                    PJson (Just val) ->
+                        Just (RString val)
 
                     Unknown val ->
                         Just (RValue val)

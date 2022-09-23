@@ -24,7 +24,7 @@ type Value
     | PBool (Maybe Bool)
     | PTime (Maybe Time.Posix)
     | PDate (Maybe Time.Posix)
-    | PJson Decode.Value
+    | PJson (Maybe String)
     | Unknown Decode.Value
 
 
@@ -61,6 +61,9 @@ encode value =
 
         PJson jsonValue ->
             jsonValue
+                |> Maybe.andThen
+                    (Decode.decodeString Decode.value >> Result.toMaybe)
+                |> Maybe.withDefault Encode.null
 
         Unknown _ ->
             Encode.null
@@ -133,11 +136,7 @@ updateWithString string value =
             PDate (Result.toMaybe (Iso8601.toTime string))
 
         PJson _ ->
-            String.nonBlank string
-                |> Maybe.andThen
-                    (Decode.decodeString Decode.value >> Result.toMaybe)
-                |> Maybe.withDefault Encode.null
-                |> PJson
+            PJson (String.nonBlank string)
 
         Unknown _ ->
             value
@@ -186,8 +185,8 @@ toString value =
         PDate maybe ->
             Maybe.map (Iso8601.fromTime >> String.slice 0 10) maybe
 
-        PJson jsonValue ->
-            Just (Encode.encode 4 jsonValue)
+        PJson maybe ->
+            maybe
 
         Unknown _ ->
             Nothing

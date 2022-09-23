@@ -150,7 +150,9 @@ update msg (PageForm params) =
             )
 
         Fetched (Err err) ->
-            ( PageForm params, Notification.error (Internal.Http.errorToString err) )
+            ( PageForm params
+            , Notification.error (Internal.Http.errorToString err)
+            )
 
         ParentFetched (Ok parent) ->
             ( PageForm { params | parent = Just parent }, AppCmd.none )
@@ -266,7 +268,11 @@ inputIsEditable fieldNames name input =
 
 recordToInputs : Record -> Inputs
 recordToInputs record =
-    record.fields |> Dict.map (\_ input -> Input.fromField input)
+    record.fields
+        |> Dict.map
+            (\_ input ->
+                Input.fromField input
+            )
 
 
 changed : PageForm -> Bool
