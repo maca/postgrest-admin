@@ -206,10 +206,7 @@ columnDecoder colNames requiredColumns columnName =
                             mapValue PText string
 
                         else if format == "json" then
-                            mapValue
-                                (\val ->
-                                    PJson (Maybe.map (Encode.encode 4) val)
-                                )
+                            mapValue (PJson << Maybe.map (Encode.encode 4))
                                 Decode.value
 
                         else if not (List.isEmpty enum) then
