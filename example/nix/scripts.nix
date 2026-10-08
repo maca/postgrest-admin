@@ -6,6 +6,13 @@ let
 
     echo "Starting all services..."
 
+    # Run setup if the database hasn't been initialized yet (setup's
+    # load-sql step is not safe to re-run against an existing database)
+    if [ ! -f "$PWD/database/pgdata/PG_VERSION" ]; then
+      echo "Database not initialized, running setup..."
+      setup
+    fi
+
     # Initialize service PIDs
     PIDS=""
 

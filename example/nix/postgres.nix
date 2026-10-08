@@ -11,6 +11,11 @@ let
     export PGDATA=$PWD/database/pgdata
     export PGHOST=$PWD/database/pgdata
     export PGDATABASE=example
+    # Second Unix socket dir, in addition to $PGHOST, so sandboxed agent
+    # tooling (seatbelt denies outbound unix-sockets by default, except a
+    # /private/tmp/eae-* prefix reserved for local Postgres/PostgREST dev
+    # services) can reach Postgres without opening a TCP port.
+    export PGSANDBOXSOCK=/tmp/eae-postgrest-admin-preview
   '';
 
   # Common helper functions
@@ -22,9 +27,14 @@ let
 
     # Start PostgreSQL
     pg_start() {
+      # -h ''' (empty listen_addresses) disables the TCP listener entirely;
+      # Postgres is reachable only via Unix socket, either $PGHOST (used by
+      # psql/load-sql/run-postgrest) or $PGSANDBOXSOCK (a /tmp/eae-* path
+      # pre-allowed for sandboxed agent tooling; see pgEnvSetup above).
+      mkdir -p "$PGSANDBOXSOCK"
       ${postgresql}/bin/pg_ctl \
         -D "$PGDATA" \
-        -o "-k $PGHOST" \
+        -o "-c unix_socket_directories='$PGHOST,$PGSANDBOXSOCK' -h '''" \
         -l "$PGDATA/postgresql.log" \
         start
       sleep 3

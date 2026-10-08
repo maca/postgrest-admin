@@ -238,7 +238,7 @@ viewFilter table idx filter =
 
                 FloatCol ->
                     floatFilterInputs column.required name idx op
-                        |> inputs "date"
+                        |> inputs "number"
 
                 BoolCol ->
                     boolFilterInputs column.required name idx op

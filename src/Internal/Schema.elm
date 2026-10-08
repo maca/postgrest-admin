@@ -3,6 +3,10 @@ module Internal.Schema exposing
     , Reference
     , Table, label
     , tablePrimaryKeyName
+    , tablePrimaryKeyColumns
+    , hasSingleColumnPrimaryKey
+    , recordIdFromRecord
+    , recordIdFilters
     , tableToSortedColumnList
     , decoder, valueDecoder
     , Record, Value(..)
@@ -26,6 +30,7 @@ module Internal.Schema exposing
 import Dict exposing (Dict)
 import Json.Decode as Decode
 import Regex exposing (Regex)
+import Url
 
 
 type ColumnType
@@ -241,18 +246,131 @@ decoder params =
             )
 
 
-tablePrimaryKey : Table -> Maybe ( String, Column )
-tablePrimaryKey { columns } =
+{-| Every column making up the primary key, in a stable order.
+
+Composite keys return all of them; tables with no key return `[]`.
+
+-}
+tablePrimaryKeyColumns : Table -> List ( String, Column )
+tablePrimaryKeyColumns { columns } =
     columns
         |> Dict.filter (\_ column -> column.primaryKey)
         |> Dict.toList
-        |> List.head
+        |> List.sortBy Tuple.first
+
+
+{-| The single primary-key column, if the table has exactly one.
+
+A composite key deliberately returns `Nothing`: there is no one column
+name that identifies a row, so callers must use `tablePrimaryKeyColumns`
+(or the id helpers below) instead of silently addressing rows by the
+first key column and mismatching.
+
+-}
+tablePrimaryKey : Table -> Maybe ( String, Column )
+tablePrimaryKey table =
+    case tablePrimaryKeyColumns table of
+        [ single ] ->
+            Just single
+
+        _ ->
+            Nothing
 
 
 tablePrimaryKeyName : Table -> Maybe String
 tablePrimaryKeyName table =
     tablePrimaryKey table
         |> Maybe.map Tuple.first
+
+
+{-| Whether the table is addressable by a single id segment in a URL.
+
+-}
+hasSingleColumnPrimaryKey : Table -> Bool
+hasSingleColumnPrimaryKey =
+    tablePrimaryKey >> (/=) Nothing
+
+
+{-| Encode a record's primary key into a single URL path segment.
+
+Single-column keys keep the historical plain form (`1172675`) so existing
+links and bookmarks stay valid. Composite keys become an `k=v` list joined
+by commas (`film_id=11,person_id=42`); the values are percent-encoded so
+that a value containing a comma or an `=` cannot forge extra pairs.
+
+-}
+recordIdFromRecord : Table -> Record -> Maybe String
+recordIdFromRecord table record =
+    let
+        keys =
+            tablePrimaryKeyColumns table
+    in
+    if List.isEmpty keys then
+        Nothing
+
+    else if List.length keys == 1 then
+        List.head keys
+            |> Maybe.andThen (\( name, _ ) -> Dict.get name record)
+            |> Maybe.andThen valueToString
+
+    else
+        keys
+            |> List.foldl
+                (\( name, _ ) acc ->
+                    acc
+                        |> Maybe.andThen
+                            (\pairs ->
+                                Dict.get name record
+                                    |> Maybe.andThen valueToString
+                                    |> Maybe.map
+                                        (\value ->
+                                            pairs ++ [ name ++ "=" ++ Url.percentEncode value ]
+                                        )
+                            )
+                )
+                (Just [])
+            |> Maybe.map (String.join ",")
+
+
+{-| The inverse of `recordIdFromRecord`: turn a path segment back into
+`(column, value)` pairs suitable for `key=eq.value` PostgREST filters.
+
+Accepts both the plain single-key form and the `k=v,...` composite form, so
+it is safe to feed directly from a user-supplied URL segment. The table is
+needed to name the column in the legacy single-key case.
+
+-}
+recordIdFilters : Table -> String -> List ( String, String )
+recordIdFilters table segment =
+    let
+        decoded =
+            Url.percentDecode segment |> Maybe.withDefault segment
+
+        pairs =
+            if String.contains "=" decoded then
+                decoded
+                    |> String.split ","
+                    |> List.filterMap
+                        (\pair ->
+                            case String.split "=" pair of
+                                [ key, value ] ->
+                                    Just ( key, Url.percentDecode value |> Maybe.withDefault value )
+
+                                _ ->
+                                    Nothing
+                        )
+
+            else
+                []
+    in
+    if List.isEmpty pairs then
+        -- Legacy single-column form: `/<resource>/1172675`.
+        tablePrimaryKeyName table
+            |> Maybe.map (\name -> [ ( name, decoded ) ])
+            |> Maybe.withDefault []
+
+    else
+        pairs
 
 
 columnType : String -> Maybe String -> ColumnType
@@ -465,10 +583,10 @@ identifiers : List String
 identifiers =
     [ "title"
     , "name"
-    , "full name"
+    , "full_name"
     , "email"
-    , "first name"
-    , "last name"
+    , "first_name"
+    , "last_name"
     , "city"
     , "country"
     ]

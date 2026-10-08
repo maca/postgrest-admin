@@ -1,12 +1,14 @@
 { pkgs }:
 
 let
+  # NB: fetch a versioned CDN path, not /redoc/latest/..., so the bundle is
+  # reproducible. The hash below matches Redoc 2.5.2 (also what static/redoc.standalone.js contains).
   redoc = pkgs.stdenv.mkDerivation {
     pname = "redoc-standalone";
-    version = "2.5.1";
+    version = "2.5.2";
 
     src = pkgs.fetchurl {
-      url = "https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js";
+      url = "https://cdn.redoc.ly/redoc/v2.5.2/bundles/redoc.standalone.js";
       sha256 = "sha256-a+ta6iO3HQkSLuNd6PMm44rsBQ53Tzv7ofNOXDZgiYY=";
     };
 

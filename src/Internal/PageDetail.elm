@@ -38,6 +38,7 @@ type alias Model =
     , id : String
     , record : Maybe Record
     , confirmDelete : Bool
+    , deleteError : Maybe String
     , countTotals : Dict String Int
     }
 
@@ -58,6 +59,7 @@ init { client, mountPath, table, id } key =
       , id = id
       , record = Nothing
       , confirmDelete = False
+      , deleteError = Nothing
       , countTotals = Dict.empty
       }
     , Client.fetchRecord
@@ -114,16 +116,25 @@ update msg model =
                 ]
             )
 
+        Deleted (Err (Client.ConstraintViolation dbErr)) ->
+            -- The row is still referenced by other rows (23503), or some
+            -- other constraint blocks the delete. Explain that in place,
+            -- with the modal kept open so the message is next to the
+            -- button that caused it.
+            ( { model | deleteError = Just (Client.dbErrorMessage dbErr) }
+            , AppCmd.none
+            )
+
         Deleted (Err err) ->
-            ( model
+            ( { model | deleteError = Nothing }
             , AppCmd.clientError err
             )
 
         DeleteModalOpened ->
-            ( { model | confirmDelete = True }, AppCmd.none )
+            ( { model | confirmDelete = True, deleteError = Nothing }, AppCmd.none )
 
         DeleteModalClosed ->
-            ( { model | confirmDelete = False }, AppCmd.none )
+            ( { model | confirmDelete = False, deleteError = Nothing }, AppCmd.none )
 
         DeleteConfirmed ->
             ( model
@@ -197,6 +208,14 @@ view model =
                                           record?"""
                                 ]
                             , Html.p [] [ Html.text "This action cannot be undone." ]
+                            , case model.deleteError of
+                                Just message ->
+                                    Html.div
+                                        [ Attrs.class "form-error-message" ]
+                                        [ Html.text message ]
+
+                                Nothing ->
+                                    Html.text ""
                             , Html.div
                                 [ Attrs.class "actions" ]
                                 [ Html.button

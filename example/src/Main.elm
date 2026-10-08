@@ -26,6 +26,7 @@ port loggedOut : () -> Cmd msg
 type alias Model =
     { adminAppModel : PostgRestAdmin.Model
     , authFormFields : Field String
+    , authError : Maybe String
     }
 
 
@@ -115,6 +116,7 @@ adminAppParams params =
                         params.formFields
                             |> Maybe.withDefault
                                 (authForm (hostParams app))
+                    , authError = Nothing
                     }
             }
 
@@ -161,7 +163,7 @@ update msg model =
                     model.authFormFields
                         |> Parse.parseUpdate formParser fieldMsg
             in
-            ( { model | authFormFields = fields }
+            ( { model | authFormFields = fields, authError = Nothing }
             , Cmd.none
             )
 
@@ -216,12 +218,14 @@ update msg model =
                         )
                         model.adminAppModel
             in
-            ( { model | adminAppModel = adminModel }
-            , Cmd.map AdminAppChanged adminCmd
+            ( { model | adminAppModel = adminModel, authError = Nothing }
+            , Cmd.batch [ Cmd.map AdminAppChanged adminCmd, loggedIn token ]
             )
 
         GotToken (Err _) ->
-            ( model, Cmd.none )
+            ( { model | authError = Just "Invalid email/password or JWT. Please try again." }
+            , Cmd.none
+            )
 
 
 type AuthScheme
@@ -324,7 +328,13 @@ view model =
                 [ Attrs.class "auth-form"
                 , Events.onSubmit (SelectorChanged AuthFormSubmitted)
                 ]
-                [ model.authFormFields
+                [ case model.authError of
+                    Just message ->
+                        Html.p [ Attrs.class "auth-error" ] [ Html.text message ]
+
+                    Nothing ->
+                        Html.text ""
+                , model.authFormFields
                     |> Field.toHtml (SelectorChanged << AuthFieldsChanged)
                 , Html.button
                     [ Attrs.disabled

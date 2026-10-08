@@ -68,6 +68,10 @@ GRANT web_anon TO authenticator;
 GRANT bluebox TO authenticator;
 
 
+-- authenticator is NOINHERIT (see roles.sql), so it needs USAGE on every
+-- schema PostgREST exposes granted directly, or PostgREST's schema-cache
+-- builder silently drops the schema (no error, just a 404 on every table).
+GRANT USAGE ON SCHEMA bluebox TO authenticator;
 GRANT USAGE ON SCHEMA bluebox TO web_anon;
 GRANT USAGE ON SCHEMA bluebox TO bluebox;
 
@@ -82,3 +86,13 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA bluebox GRANT SELECT ON TABLES TO web_anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA bluebox GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bluebox;
 ALTER DEFAULT PRIVILEGES IN SCHEMA bluebox GRANT USAGE, SELECT ON SEQUENCES TO web_anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA bluebox GRANT USAGE, SELECT ON SEQUENCES TO bluebox;
+
+
+-- The seed data inserts explicit PK values for identity columns without
+-- ever calling nextval(), so their sequences are left at their initial
+-- value (1) instead of tracking the seeded max id. The next INSERT that
+-- relies on the identity default then collides with an existing row
+-- (23505 duplicate key). Advance every identity/serial sequence in
+-- bluebox past the seeded data so app-driven creates work immediately.
+SELECT setval('bluebox.person_person_id_seq', (SELECT max(person_id) FROM bluebox.person));
+SELECT setval('bluebox.genre_genre_id_seq', (SELECT max(genre_id) FROM bluebox.film_genre));

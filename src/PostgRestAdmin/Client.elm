@@ -4,6 +4,7 @@ module PostgRestAdmin.Client exposing
     , fetchRecord, fetchRecords, saveRecord, deleteRecord, count, fetchParentLabel
     , jsonRequest, bytesRequest, chunk
     , Error(..), errorToString
+    , DbConstraintError, DbErrorKind(..), dbErrorKind, dbErrorMessage
     , AuthScheme(..), jwt, unset, toJwtString, authHeader, updateJwt, logout
     , fetchSchema, schemaIsLoaded
     , associationJoin
@@ -28,6 +29,7 @@ module PostgRestAdmin.Client exposing
 # Errors
 
 @docs Error, errorToString
+@docs DbConstraintError, DbErrorKind, dbErrorKind, dbErrorMessage
 
 
 # Auth
@@ -65,11 +67,215 @@ type Error
     | Timeout
     | NetworkError
     | BadStatus Int (Maybe String)
+    | ConstraintViolation DbConstraintError
     | BadHeader String
     | DecodeError Decode.Error
     | RequestError String
     | Forbidden
     | Unauthorized
+
+
+{-| A database-level rejection, parsed out of PostgREST's JSON error body.
+
+PostgREST forwards PostgreSQL's SQLSTATE as `code` and, for constraint
+violations, the offending column and constraint in `details`: a Postgres
+`column "zip_code" of relation "store"` style sentence in `details` plus a
+structured `column`/`constraint` pair when the violation is attributable to
+a single field. Carrying those separately is what lets the UI say which
+field is wrong instead of dumping the raw response.
+
+-}
+type alias DbConstraintError =
+    { code : String
+    , message : String
+    , detail : Maybe String
+    , hint : Maybe String
+    , table : Maybe String
+    , column : Maybe String
+    , constraint : Maybe String
+    }
+
+
+{-| What kind of constraint the database rejected, derived from the SQLSTATE.
+-}
+type DbErrorKind
+    = ForeignKeyReference
+    | NotNull
+    | Unique
+    | Check
+    | OtherConstraint
+    | NonConstraintError
+
+
+{-| Classify a SQLSTATE into the handful of cases worth wording differently.
+-}
+dbErrorKind : String -> DbErrorKind
+dbErrorKind code =
+    case code of
+        "23503" ->
+            ForeignKeyReference
+
+        "23502" ->
+            NotNull
+
+        "23505" ->
+            Unique
+
+        "23514" ->
+            Check
+
+        _ ->
+            if String.startsWith "23" code then
+                OtherConstraint
+
+            else
+                NonConstraintError
+
+
+{-| A short, field-aware explanation of a database rejection.
+
+Names the offending column ("Zip code: ...") whenever the rejection is
+attributable to one input, so the user knows what to fix instead of reading
+a SQLSTATE. A foreign-key rejection is worded by direction, because the
+same SQLSTATE covers two very different situations:
+
+  - writing a value with no matching parent row
+    (`... is not present in table "zip_code_info"`) → point at the field;
+  - deleting a row some other table still references
+    (`... is still referenced from table "inventory"`) → point at the
+    referencing table, since the fix is on the other side of the relation.
+
+-}
+dbErrorMessage : DbConstraintError -> String
+dbErrorMessage dbErr =
+    let
+        { code, message, detail, column, table, constraint } =
+            dbErr
+
+        detailText =
+            Maybe.withDefault "" detail
+
+        fieldSubject =
+            column
+                |> Maybe.map (\col -> String.humanize col ++ ": ")
+                |> Maybe.withDefault ""
+
+        tableSubject =
+            table
+                |> Maybe.map (\name -> String.humanize name ++ ": ")
+                |> Maybe.withDefault ""
+    in
+    case dbErrorKind code of
+        ForeignKeyReference ->
+            if String.contains "still referenced" detailText then
+                tableSubject ++ "other records still reference this one. Delete those first."
+
+            else
+                fieldSubject ++ "no matching record exists — pick an existing value."
+
+        NotNull ->
+            fieldSubject ++ "this field is required."
+
+        Unique ->
+            fieldSubject ++ "this value is already taken by another record."
+
+        Check ->
+            fieldSubject ++ "this value is not allowed by the database."
+
+        OtherConstraint ->
+            fieldSubject
+                ++ "the database rejected this value"
+                ++ (constraint
+                        |> Maybe.map (\name -> " (" ++ name ++ ")")
+                        |> Maybe.withDefault ""
+                   )
+                ++ "."
+
+        NonConstraintError ->
+            message
+
+
+{-| PostgREST reports a constraint violation as a JSON body with the
+SQLSTATE in `code`, a sentence in `message`, and the offending value in
+`details`:
+
+    {"code":"23503",
+     "details":"Key (zip_code)=(99999999) is not present in table \"zip_code_info\".",
+     "hint":null,
+     "message":"insert or update on table \"store\" violates foreign key constraint \"store_zip_code_fkey\""}
+
+It does *not* hand over the column or constraint as separate fields, so
+they are recovered from those two sentences: `Key (col)=(value)` from
+`details`, and `column "c" of relation "t"` / `on table "t"` /
+`constraint "n"` from `message`. Extraction is best-effort — a body that
+matches nothing still yields an error carrying the raw SQLSTATE.
+
+-}
+dbConstraintErrorDecoder : Decoder DbConstraintError
+dbConstraintErrorDecoder =
+    Decode.map4
+        (\code message detail hint ->
+            { code = code
+            , message = message
+            , detail = detail
+            , hint = hint
+            , table =
+                firstCapture "on table \"([^\"]+)\"" (Just message)
+                    |> orElse (firstCapture "of relation \"([^\"]+)\"" (Just message))
+            , column =
+                firstCapture "Key \\(([^)]+)\\)=" detail
+                    |> orElse (firstCapture "column \"([^\"]+)\"" (Just message))
+            , constraint = firstCapture "constraint \"([^\"]+)\"" (Just message)
+            }
+        )
+        (Decode.field "code" Decode.string)
+        (Decode.oneOf [ Decode.field "message" Decode.string, Decode.succeed "" ])
+        (Decode.maybe (Decode.field "details" Decode.string))
+        (Decode.maybe (Decode.field "hint" Decode.string))
+
+
+orElse : Maybe a -> Maybe a -> Maybe a
+orElse fallback primary =
+    case primary of
+        Just _ ->
+            primary
+
+        Nothing ->
+            fallback
+
+
+{-| The first capture group of the first match of `pattern` in `subject`.
+-}
+firstCapture : String -> Maybe String -> Maybe String
+firstCapture pattern subject =
+    subject
+        |> Maybe.andThen
+            (\text ->
+                Regex.fromString pattern
+                    |> Maybe.withDefault Regex.never
+                    |> (\regex -> Regex.findAtMost 1 regex text)
+                    |> List.concatMap .submatches
+                    |> List.filterMap identity
+                    |> List.head
+            )
+            |> Maybe.andThen (String.trim >> (\trimmed -> (\s -> if String.isEmpty s then Nothing else Just s) trimmed))
+
+
+{-| Turn a non-2xx response into an `Error`, preferring a database
+constraint explanation when the body carries one.
+-}
+badStatusError : Int -> String -> Error
+badStatusError status body =
+    case Decode.decodeString dbConstraintErrorDecoder body of
+        Ok dbErr ->
+            if dbErrorKind dbErr.code == NonConstraintError then
+                BadStatus status (Decode.decodeString badStatusDecoder body |> Result.withDefault Nothing)
+
+            else
+                ConstraintViolation dbErr
+
+        Err _ ->
+            BadStatus status (Decode.decodeString badStatusDecoder body |> Result.withDefault Nothing)
 
 
 type alias Count =
@@ -233,6 +439,9 @@ errorToString error =
             "The server responded with an error: "
                 ++ (body |> Maybe.withDefault (String.fromInt status))
 
+        ConstraintViolation dbErr ->
+            dbErrorMessage dbErr
+
         DecodeError err ->
             Decode.errorToString err
 
@@ -268,10 +477,7 @@ jsonResolver decoder =
                 Decode.decodeString decoder body
                     |> Result.mapError DecodeError
             )
-            (\body ->
-                Decode.decodeString badStatusDecoder body
-                    |> Result.withDefault Nothing
-            )
+            badStatusError
         )
 
 
@@ -293,16 +499,13 @@ countResolver decoder =
                     _ ->
                         Err (BadHeader "content-range")
             )
-            (\body ->
-                Decode.decodeString badStatusDecoder body
-                    |> Result.withDefault Nothing
-            )
+            badStatusError
         )
 
 
 resolve :
     (Http.Metadata -> body -> Result Error value)
-    -> (body -> Maybe String)
+    -> (Int -> body -> Error)
     -> Http.Response body
     -> Result Error value
 resolve fn parseError response =
@@ -325,7 +528,7 @@ resolve fn parseError response =
                     Err Forbidden
 
                 _ ->
-                    Err (BadStatus statusCode (parseError body))
+                    Err (parseError statusCode body)
 
         Http.GoodStatus_ metadata body ->
             fn metadata body
@@ -380,9 +583,7 @@ fetchRecord { client, table, id } =
             PG.toQueryString
                 (List.filterMap identity
                     [ Just (PG.select (selects table))
-                    , Schema.tablePrimaryKeyName table
-                        |> Maybe.map
-                            (\key -> PG.eq (PG.string id) |> PG.param key)
+                    , Schema.recordIdFilters table id |> filtersToQuery
                     , Just (PG.limit 1)
                     ]
                 )
@@ -395,6 +596,27 @@ fetchRecord { client, table, id } =
         , body = Http.emptyBody
         , resolver = jsonResolver (recordDecoder table)
         }
+
+
+filtersToQuery : List ( String, String ) -> Maybe PG.Param
+filtersToQuery filters =
+    let
+        params =
+            List.filterMap
+                (\( column, value ) ->
+                    if String.isEmpty column then
+                        Nothing
+
+                    else
+                        Just (PG.param column (PG.eq (PG.string value)))
+                )
+                filters
+    in
+    if List.isEmpty params then
+        Nothing
+
+    else
+        Just (PG.and params)
 
 
 fetchRecords :
@@ -459,17 +681,32 @@ saveRecord { client, body, table, decoder, id } =
         queryString =
             PG.toQueryString [ PG.select (selects table) ]
 
-        ( path, method ) =
-            case Maybe.map2 Tuple.pair (Schema.tablePrimaryKeyName table) id of
-                Just ( pkName, recordId ) ->
-                    ( "/" ++ table.name ++ "?" ++ pkName ++ "=eq." ++ recordId ++ "&" ++ queryString
-                    , "PATCH"
-                    )
+        idFilters =
+            id
+                |> Maybe.map (Schema.recordIdFilters table)
+                |> Maybe.withDefault []
+                |> List.map (\( column, value ) ->
+                    Url.percentEncode column ++ "=eq." ++ Url.percentEncode value
+                )
 
-                Nothing ->
-                    ( "/" ++ table.name ++ "?" ++ queryString
-                    , "POST"
-                    )
+        ( path, method ) =
+            if List.isEmpty idFilters then
+                ( "/" ++ table.name ++ "?" ++ queryString
+                , "POST"
+                )
+
+            else
+                -- A PATCH without a filter would rewrite every row; refuse
+                -- to fall back to POST when an id *was* given but could not
+                -- be turned into a filter (e.g. a table with no single key).
+                ( "/"
+                    ++ table.name
+                    ++ "?"
+                    ++ String.join "&" idFilters
+                    ++ "&"
+                    ++ queryString
+                , "PATCH"
+                )
     in
     task
         { client = client
@@ -513,23 +750,28 @@ deleteRecord :
     -> Task.Task Error ()
 deleteRecord { client, table, id } =
     let
-        queryStr =
-            PG.toQueryString
-                (List.filterMap identity
-                    [ Schema.tablePrimaryKeyName table
-                        |> Maybe.map
-                            (\key -> PG.eq (PG.string id) |> PG.param key)
-                    ]
+        filters =
+            Schema.recordIdFilters table id
+                |> List.map (\( column, value ) ->
+                    Url.percentEncode column ++ "=eq." ++ Url.percentEncode value
                 )
+
+        queryStr =
+            String.join "&" filters
     in
-    task
-        { client = client
-        , method = "DELETE"
-        , headers = []
-        , path = "/" ++ table.name ++ "?" ++ queryStr
-        , body = Http.emptyBody
-        , resolver = jsonResolver (Decode.succeed ())
-        }
+    if List.isEmpty filters then
+        -- Deleting with no usable filter would wipe the whole table.
+        Task.fail (RequestError "This table has no usable primary key, so a single record cannot be identified. Delete was not sent.")
+
+    else
+        task
+            { client = client
+            , method = "DELETE"
+            , headers = []
+            , path = "/" ++ table.name ++ "?" ++ queryStr
+            , body = Http.emptyBody
+            , resolver = jsonResolver (Decode.succeed ())
+            }
 
 
 {-| Perform a request
@@ -585,39 +827,49 @@ task { client, method, headers, path, body, resolver } =
 chunk : Client -> Table -> List String -> Task.Task Error (List String)
 chunk client table ids =
     let
-        primaryKeyName =
-            Schema.tablePrimaryKeyName table
+        keyAttrs =
+            Schema.tablePrimaryKeyColumns table
+                |> List.map Tuple.first
 
-        queryStr =
-            PG.toQueryString
-                [ PG.or
-                    (List.filterMap
-                        (\id ->
-                            primaryKeyName
-                                |> Maybe.map (\key -> PG.param key (PG.eq (PG.string id)))
-                        )
-                        ids
+        rowFilters =
+            ids
+                |> List.filterMap
+                    (\id ->
+                        let
+                            filters =
+                                Schema.recordIdFilters table id
+                                    |> List.map (\( column, value ) -> PG.param column (PG.eq (PG.string value)))
+                        in
+                        if List.isEmpty filters then
+                            Nothing
+
+                        else
+                            Just (PG.and filters)
                     )
-                , PG.select
-                    (List.filterMap identity [ Maybe.map PG.attribute primaryKeyName ])
-                ]
     in
-    task
-        { client = client
-        , method = "GET"
-        , headers = []
-        , path = "/" ++ table.name ++ "?" ++ queryStr
-        , body = Http.emptyBody
-        , resolver =
-            jsonResolver
-                (case primaryKeyName of
-                    Just key ->
-                        Decode.list (Decode.field key idDecoder)
+    if List.isEmpty keyAttrs || List.isEmpty rowFilters then
+        Task.succeed []
 
-                    Nothing ->
-                        Decode.fail ""
-                )
-        }
+    else
+        task
+            { client = client
+            , method = "GET"
+            , headers = []
+            , path =
+                "/"
+                    ++ table.name
+                    ++ "?"
+                    ++ PG.toQueryString
+                        [ PG.or rowFilters
+                        , PG.select (List.map PG.attribute keyAttrs)
+                        ]
+            , body = Http.emptyBody
+            , resolver =
+                jsonResolver
+                    (Decode.list (Decode.dict Schema.valueDecoder)
+                        |> Decode.map (List.filterMap (Schema.recordIdFromRecord table))
+                    )
+            }
 
 
 idDecoder : Decoder String
@@ -644,7 +896,7 @@ bytesRequest { client, method, headers, path, body } =
         , headers = headers
         , path = path
         , body = body
-        , resolver = Http.bytesResolver (resolve (always Ok) (always Nothing))
+        , resolver = Http.bytesResolver (resolve (always Ok) (\status _ -> BadStatus status Nothing))
         }
 
 
@@ -657,7 +909,7 @@ count { client, path } =
         , path = path
         , body = Http.emptyBody
         , resolver =
-            Http.bytesResolver
+            Http.stringResolver
                 (resolve
                     (\{ headers } _ ->
                         case
@@ -670,7 +922,7 @@ count { client, path } =
                             _ ->
                                 Err (BadHeader "content-range")
                     )
-                    (always Nothing)
+                    badStatusError
                 )
         }
 

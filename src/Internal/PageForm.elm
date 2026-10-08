@@ -11,11 +11,13 @@ import Html.Attributes as Attrs
 import Html.Events as Events
 import Http
 import Internal.Cmd as AppCmd exposing (AppCmd)
+import Inflect
 import Internal.Schema as Schema exposing (Table, Value(..))
 import Json.Decode as Decode
 import PostgRestAdmin.Client as Client exposing (Client)
 import PostgRestAdmin.MountPath as MountPath exposing (MountPath, path)
 import Postgrest.Client as PG
+import String as CoreString
 import String.Extra as String
 import Task
 import Url.Builder as Url
@@ -40,6 +42,7 @@ type alias Model =
     , parentLabel : Maybe String
     , form : Field.Field String
     , autocompleteValues : Dict String AutocompleteOptions
+    , saveError : Maybe String
     }
 
 
@@ -65,29 +68,34 @@ init { client, navKey, mountPath, table, id, parent } =
       , id = id
       , parent = parent
       , parentLabel = Nothing
-      , form = buildForm table
+      , form = buildForm { isEdit = id /= Nothing, table = table }
       , autocompleteValues = Dict.empty
+      , saveError = Nothing
       }
-    , AppCmd.batch
-        (List.concat
-            [ [ Maybe.map2 Tuple.pair (Schema.tablePrimaryKeyName table) id
-                    |> Maybe.map (fetch client table)
-                    |> Maybe.withDefault AppCmd.none
-              , parent
-                    |> Maybe.andThen (Schema.buildParentReference client.schema table)
-                    |> Maybe.map
-                        (Client.fetchParentLabel client
-                            >> Task.attempt ParentLabelFetched
-                            >> AppCmd.wrap
-                        )
-                    |> Maybe.withDefault AppCmd.none
-              ]
-            , Schema.buildReferences table
-                |> Dict.toList
-                |> List.map (fetchAutcompleteValues client)
-            ]
+        , AppCmd.batch
+            (List.concat
+                [ [ if Schema.tablePrimaryKeyColumns table |> List.isEmpty then
+                        AppCmd.none
+
+                    else
+                        id
+                            |> Maybe.map (fetch client table)
+                            |> Maybe.withDefault AppCmd.none
+                  , parent
+                        |> Maybe.andThen (Schema.buildParentReference client.schema table)
+                        |> Maybe.map
+                            (Client.fetchParentLabel client
+                                >> Task.attempt ParentLabelFetched
+                                >> AppCmd.wrap
+                            )
+                        |> Maybe.withDefault AppCmd.none
+                  ]
+                , Schema.buildReferences table
+                    |> Dict.toList
+                    |> List.map (fetchAutcompleteValues client)
+                ]
+            )
         )
-    )
 
 
 fetchAutcompleteValues : Client -> ( String, Schema.Reference ) -> AppCmd Msg
@@ -142,22 +150,35 @@ fetchAutcompleteValues client ( colName, ref ) =
         |> AppCmd.wrap
 
 
-fetch : Client -> Table -> ( String, String ) -> AppCmd Msg
-fetch client table ( primaryKeyName, recordId ) =
+fetch : Client -> Table -> String -> AppCmd Msg
+fetch client table recordId =
     let
         selectedCols =
             PG.select
                 (Dict.keys table.columns
-                    |> List.filter ((/=) primaryKeyName)
+                    |> List.filter (\name -> Schema.tablePrimaryKeyColumns table |> List.any (\( keyName, _ ) -> keyName == name) |> not)
                     |> List.map PG.attribute
                 )
 
         queryString =
             PG.toQueryString
-                [ selectedCols
-                , PG.param primaryKeyName (PG.eq (PG.string recordId))
-                , PG.limit 1
-                ]
+                (List.filterMap identity
+                    [ Just selectedCols
+                    , (Schema.recordIdFilters table recordId
+                        |> List.map (\( column, value ) ->
+                            PG.param column (PG.eq (PG.string value))
+                        )
+                        |> (\filters ->
+                                if List.isEmpty filters then
+                                    Nothing
+
+                                else
+                                    Just (PG.and filters)
+                           )
+                      )
+                    , Just (PG.limit 1)
+                    ]
+                )
     in
     Client.jsonRequest
         { client = client
@@ -220,7 +241,7 @@ update msg model =
             )
 
         Saved (Ok id) ->
-            ( model
+            ( { model | saveError = Nothing }
             , AppCmd.batch
                 [ AppCmd.wrap
                     (Nav.pushUrl model.key
@@ -230,18 +251,26 @@ update msg model =
                 ]
             )
 
+        Saved (Err (Client.ConstraintViolation dbErr)) ->
+            -- The database rejected the value for a specific reason (missing
+            -- parent row, duplicate key, ...). Say which field and why,
+            -- instead of surfacing the raw SQLSTATE-backed response body.
+            ( { model | saveError = Just (Client.dbErrorMessage dbErr) }
+            , AppCmd.none
+            )
+
         Saved (Err err) ->
-            ( model
+            ( { model | saveError = Nothing }
             , AppCmd.clientError err
             )
 
         FormChanged innerMsg ->
-            ( { model | form = Field.update innerMsg model.form }
+            ( { model | form = Field.update innerMsg model.form, saveError = Nothing }
             , AppCmd.dismiss
             )
 
         Submitted ->
-            ( { model | form = Field.validate model.form |> Field.touch }
+            ( { model | form = Field.validate model.form |> Field.touch, saveError = Nothing }
             , case Parse.parse Parse.json model.form of
                 Ok jsonBody ->
                     Client.saveRecord
@@ -252,7 +281,13 @@ update msg model =
                         , decoder =
                             case Schema.tablePrimaryKeyName model.table of
                                 Just pkName ->
-                                    Decode.field pkName Decode.string
+                                    -- The PK can come back as a JSON string,
+                                    -- int, or float depending on the
+                                    -- column's Postgres type; a decoder
+                                    -- hardcoded to `Decode.string` fails on
+                                    -- the very common numeric-PK case even
+                                    -- though the save itself succeeded.
+                                    Decode.field pkName idDecoder
 
                                 Nothing ->
                                     Decode.fail "Coudn't figure the field id"
@@ -305,6 +340,15 @@ updateAutocompletOptions colName values =
             identity
 
 
+idDecoder : Decode.Decoder String
+idDecoder =
+    Decode.oneOf
+        [ Decode.string
+        , Decode.map CoreString.fromInt Decode.int
+        , Decode.map CoreString.fromFloat Decode.float
+        ]
+
+
 autocompleteOption : { id : String, label : String } -> ( String, FormValue.Value )
 autocompleteOption attrs =
     ( autocompleteLabel attrs, FormValue.string attrs.id )
@@ -348,9 +392,16 @@ view ({ table, id, mountPath } as model) =
             )
         , Html.h2
             []
-            [ Schema.label model.table
-                |> Maybe.map Html.text
-                |> Maybe.withDefault (Html.text "")
+            [ Html.text
+                ((case id of
+                    Just _ ->
+                        "Edit "
+
+                    Nothing ->
+                        "New "
+                 )
+                    ++ (String.humanize table.name |> Inflect.toSingular)
+                )
             ]
         , let
             formValid =
@@ -366,7 +417,15 @@ view ({ table, id, mountPath } as model) =
                 Attrs.class ""
             , Attrs.novalidate True
             ]
-            [ Field.toHtml FormChanged model.form
+            [ case model.saveError of
+                Just message ->
+                    Html.div
+                        [ Attrs.class "form-error-message" ]
+                        [ Html.text message ]
+
+                Nothing ->
+                    Html.text ""
+            , Field.toHtml FormChanged model.form
             , Html.fieldset []
                 [ Html.a
                     [ Attrs.class "button button-clear"
@@ -394,23 +453,42 @@ view ({ table, id, mountPath } as model) =
         ]
 
 
-buildForm : Table -> Field.Field String
-buildForm table =
+buildForm : { isEdit : Bool, table : Table } -> Field.Field String
+buildForm { isEdit, table } =
     Field.group []
         (Dict.toList table.columns
             |> List.sortWith sortColumns
-            |> List.filterMap fieldFromColumn
+            |> List.filterMap (fieldFromColumn isEdit)
         )
 
 
-fieldFromColumn : ( String, Schema.Column ) -> Maybe (Field.Field String)
-fieldFromColumn ( name, column ) =
+{-| A primary key is only addressable through the URL on an edit form.
+
+On a *create* form it has to stay editable whenever the database will not
+fill it in by itself — a uuid/identity column with a `default` (or a
+serial) can be left blank and omitted from the payload, but a plain
+`integer PRIMARY KEY` with no default is required, and dropping the field
+made such tables impossible to create through the UI at all.
+
+-}
+fieldFromColumn : Bool -> ( String, Schema.Column ) -> Maybe (Field.Field String)
+fieldFromColumn isEdit ( name, column ) =
     let
         attrs =
             [ Field.name name
             , Field.identifier name
             , Field.label (String.humanize name)
-            , Field.required column.required
+            , Field.required
+                (case column.value of
+                    Schema.Blank ->
+                        column.required
+
+                    _ ->
+                        -- The schema reports a server-side default for this
+                        -- column: leaving it empty is fine, the database
+                        -- fills it in.
+                        False
+                )
             , Field.value
                 (case column.value of
                     String str ->
@@ -430,8 +508,13 @@ fieldFromColumn ( name, column ) =
                 )
             ]
     in
-    if column.primaryKey then
+    if column.primaryKey && isEdit then
         Nothing
+
+    else if column.primaryKey then
+        -- `Field.text` on purpose: PK types vary (int, uuid, text) and the
+        -- int/float widgets reject the uuid/text cases.
+        Just (Field.text attrs)
 
     else if column.foreignKey /= Nothing then
         Just (Field.strictAutocomplete attrs)

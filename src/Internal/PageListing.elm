@@ -489,35 +489,47 @@ update msg model =
                                 csv.records
                     in
                     if Set.isEmpty extra && Set.isEmpty missing then
-                        ( { model | uploadState = FetchingIds }
-                        , (if List.isEmpty ids then
-                            CsvProcessed file (Ok records)
-                                |> Task.succeed
-                                |> Task.perform identity
+                        case List.filter (hasErrors model.table) records of
+                            [] ->
+                                ( { model | uploadState = FetchingIds }
+                                , (if List.isEmpty ids then
+                                    CsvProcessed file (Ok records)
+                                        |> Task.succeed
+                                        |> Task.perform identity
 
-                           else
-                            List.chunksOfLeft 1000 ids
-                                |> List.map (Client.chunk model.client model.table)
-                                |> Task.sequence
-                                |> Task.map (List.concat >> Set.fromList)
-                                |> Task.map
-                                    (\fetchIds ->
-                                        List.map
-                                            (\rec ->
-                                                { rec
-                                                    | persisted =
-                                                        rec.id
-                                                            |> Maybe.map
-                                                                (\id -> Set.member id fetchIds)
-                                                            |> Maybe.withDefault False
-                                                }
+                                   else
+                                    List.chunksOfLeft 1000 ids
+                                        |> List.map (Client.chunk model.client model.table)
+                                        |> Task.sequence
+                                        |> Task.map (List.concat >> Set.fromList)
+                                        |> Task.map
+                                            (\fetchIds ->
+                                                List.map
+                                                    (\rec ->
+                                                        { rec
+                                                            | persisted =
+                                                                rec.id
+                                                                    |> Maybe.map
+                                                                        (\id -> Set.member id fetchIds)
+                                                                    |> Maybe.withDefault False
+                                                        }
+                                                    )
+                                                    records
                                             )
-                                            records
-                                    )
-                                |> Task.attempt (CsvProcessed file)
-                          )
-                            |> AppCmd.wrap
-                        )
+                                        |> Task.attempt (CsvProcessed file)
+                                  )
+                                    |> AppCmd.wrap
+                                )
+
+                            withErrors ->
+                                -- Bad rows are caught before the id-existence
+                                -- pre-check ever runs, so a malformed PK
+                                -- value (e.g. non-numeric text in an integer
+                                -- column) can't crash that query with a raw
+                                -- Postgres error before any preview is shown.
+                                ( { model | uploadState = UploadWithErrors withErrors }
+                                , AppCmd.none
+                                )
 
                     else
                         ( { model
@@ -538,7 +550,7 @@ update msg model =
                     )
 
         CsvProcessed file (Ok records) ->
-            case List.filter hasErrors records of
+            case List.filter (hasErrors model.table) records of
                 [] ->
                     ( { model | uploadState = UploadWithPreview file records }
                     , AppCmd.none
@@ -765,7 +777,7 @@ view model =
                     uploadWithoutPreview file
 
                 BadCsvSchema csvUpload ->
-                    badSchemaPreview csvUpload
+                    badSchemaPreview model.table csvUpload
 
                 Idle ->
                     Html.text ""
@@ -953,53 +965,75 @@ viewPage model pageNum page =
                 )
 
 
+onActivate : Msg -> Html.Attribute Msg
+onActivate msg =
+    Events.on "keydown"
+        (Decode.field "key" Decode.string
+            |> Decode.andThen
+                (\key ->
+                    if key == "Enter" || key == " " then
+                        Decode.succeed msg
+
+                    else
+                        Decode.fail "not an activation key"
+                )
+        )
+
+
+sortControl : Msg -> List (Html Msg) -> Html Msg
+sortControl msg =
+    Html.span
+        [ Attrs.class "sort"
+        , Attrs.attribute "role" "button"
+        , Attrs.tabindex 0
+        , Events.onClick msg
+        , onActivate msg
+        ]
+
+
 viewHeaderCell : Model -> Int -> ( String, Column ) -> Html Msg
 viewHeaderCell { order } idx ( name, _ ) =
     let
         defaultHeader =
-            Html.span
-                [ Attrs.class "sort"
-                , Attrs.attribute "aria-sort" "other"
-                , Events.onClick <| Sort <| Asc name
-                ]
+            sortControl (Sort <| Asc name)
                 [ Html.text <| String.humanize name
                 , Html.i [ Attrs.class "icono-play" ] []
                 ]
+
+        ( ariaSort, content ) =
+            case order of
+                Asc col ->
+                    if col == name then
+                        ( "ascending"
+                        , sortControl (Sort <| Desc name)
+                            [ Html.text <| String.humanize name
+                            , Html.i [ Attrs.class "asc icono-play" ] []
+                            ]
+                        )
+
+                    else
+                        ( "none", defaultHeader )
+
+                Desc col ->
+                    if col == name then
+                        ( "descending"
+                        , sortControl (Sort <| Asc name)
+                            [ Html.text <| String.humanize name
+                            , Html.i [ Attrs.class "desc icono-play" ] []
+                            ]
+                        )
+
+                    else
+                        ( "none", defaultHeader )
+
+                Unordered ->
+                    ( "none", defaultHeader )
     in
     Html.th
-        [ Attrs.id ("col-" ++ String.fromInt idx) ]
-        [ case order of
-            Asc col ->
-                if col == name then
-                    Html.span
-                        [ Attrs.class "sort"
-                        , Attrs.attribute "aria-sort" "ascending"
-                        , Events.onClick <| Sort <| Desc name
-                        ]
-                        [ Html.text <| String.humanize name
-                        , Html.i [ Attrs.class "asc icono-play" ] []
-                        ]
-
-                else
-                    defaultHeader
-
-            Desc col ->
-                if col == name then
-                    Html.span
-                        [ Attrs.class "sort"
-                        , Attrs.attribute "aria-sort" "descending"
-                        , Events.onClick <| Sort <| Asc name
-                        ]
-                        [ Html.text <| String.humanize name
-                        , Html.i [ Attrs.class "desc icono-play" ] []
-                        ]
-
-                else
-                    defaultHeader
-
-            Unordered ->
-                defaultHeader
+        [ Attrs.id ("col-" ++ String.fromInt idx)
+        , Attrs.attribute "aria-sort" ariaSort
         ]
+        [ content ]
 
 
 viewRowCells : Model -> Record -> List (Html Msg)
@@ -1012,7 +1046,12 @@ viewRowCells model record =
                         Html.td
                             []
                             [ Html.span
-                                []
+                                [ Attrs.style "display" "block"
+                                , Attrs.style "max-width" "320px"
+                                , Attrs.style "overflow" "hidden"
+                                , Attrs.style "text-overflow" "ellipsis"
+                                , Attrs.style "white-space" "nowrap"
+                                ]
                                 [ Views.renderValue model.mountPath col value
                                 ]
                             ]
@@ -1154,9 +1193,9 @@ uploadPreview model file records =
             , Html.div
                 [ Attrs.class "csv-records-preview" ]
                 [ toCreate
-                    |> previewUploadTable "Records to create" fieldNames
+                    |> previewUploadTable model.table "Records to create" fieldNames
                 , toUpdate
-                    |> previewUploadTable "Records to update" fieldNames
+                    |> previewUploadTable model.table "Records to update" fieldNames
                 ]
             , Markdown.toHtml [ Attrs.class "disclaimer" ] <|
                 "Please review the following changes: "
@@ -1210,8 +1249,8 @@ previewUploadCopy action records =
             )
 
 
-previewUploadTable : String -> List String -> List CsvRow -> Html Msg
-previewUploadTable action fieldNames records =
+previewUploadTable : Table -> String -> List String -> List CsvRow -> Html Msg
+previewUploadTable table action fieldNames records =
     if List.isEmpty records then
         Html.text ""
 
@@ -1227,12 +1266,12 @@ previewUploadTable action fieldNames records =
                     , Html.text ")"
                     ]
                 ]
-            , previewTable fieldNames records
+            , previewTable table fieldNames records
             ]
 
 
-badSchemaPreview : CsvUpload -> Html Msg
-badSchemaPreview { extraColumns, missingColumns, headers, records } =
+badSchemaPreview : Table -> CsvUpload -> Html Msg
+badSchemaPreview table { extraColumns, missingColumns, headers, records } =
     let
         displayColumns =
             List.map (String.surround "**") >> String.toSentence
@@ -1258,7 +1297,7 @@ badSchemaPreview { extraColumns, missingColumns, headers, records } =
                               else
                                 Nothing
                             ]
-                            |> String.join ", and it"
+                            |> String.join ", and it "
                        )
                     ++ "."
                   )
@@ -1267,7 +1306,7 @@ badSchemaPreview { extraColumns, missingColumns, headers, records } =
                 ]
             , Html.div
                 [ Attrs.class "csv-records-preview" ]
-                [ previewTable headers records ]
+                [ previewTable table headers records ]
             ]
 
         actions =
@@ -1296,7 +1335,7 @@ uploadWithErrorsPreview model records =
                 ]
             , Html.div
                 [ Attrs.class "csv-records-preview" ]
-                [ previewTable fieldNames (List.filter hasErrors records) ]
+                [ previewTable model.table fieldNames (List.filter (hasErrors model.table) records) ]
             ]
 
         actions =
@@ -1346,8 +1385,8 @@ uploadWithoutPreview file =
     modalDialog "Large File" content actions
 
 
-previewTable : List String -> List CsvRow -> Html Msg
-previewTable fieldNames records =
+previewTable : Table -> List String -> List CsvRow -> Html Msg
+previewTable table fieldNames records =
     Html.table
         []
         [ Html.thead
@@ -1359,16 +1398,16 @@ previewTable fieldNames records =
         , Html.tbody
             []
             (List.map
-                (\{ rowNum, record } ->
+                (\row ->
                     Html.tr
-                        [ if hasErrors record then
+                        [ if hasErrors table row then
                             Attrs.class "with-errors"
 
                           else
                             Attrs.class ""
                         ]
-                        (Html.td [] [ Html.text (String.fromInt rowNum) ]
-                            :: List.map (previewListCell record) fieldNames
+                        (Html.td [] [ Html.text (String.fromInt row.rowNum) ]
+                            :: List.map (previewListCell row.record) fieldNames
                         )
                 )
                 records
@@ -1497,13 +1536,20 @@ parentReference table =
 isColumnVisible : ( String, Column ) -> Bool
 isColumnVisible ( _, column ) =
     case column.columnType of
+        -- TextCol/UuidCol are ordinary scalar values (Postgres `text` is the
+        -- idiomatic type for names/titles/emails, not just long-form
+        -- content) and are exactly what a listing needs to identify a row
+        -- — hiding them unconditionally left every table whose name/title
+        -- column happens to be `text` showing nothing but a raw numeric id.
+        -- Cell values are truncated with an ellipsis (see viewRowCells) so a
+        -- genuinely long text value can't blow out the row.
         TextCol ->
-            False
-
-        JsonCol ->
-            False
+            True
 
         UuidCol ->
+            True
+
+        JsonCol ->
             False
 
         ObjectCol ->
@@ -1519,8 +1565,39 @@ isColumnVisible ( _, column ) =
             True
 
 
-hasErrors _ =
-    False
+hasErrors : Table -> CsvRow -> Bool
+hasErrors table row =
+    Dict.toList table.columns
+        |> List.any
+            (\( colName, column ) ->
+                case Dict.get colName row.record |> Maybe.withDefault "" of
+                    "" ->
+                        column.required
+
+                    value ->
+                        not (valueParsesAs column.columnType value)
+            )
+
+
+valueParsesAs : ColumnType -> String -> Bool
+valueParsesAs columnType value =
+    case columnType of
+        IntegerCol ->
+            String.toInt value /= Nothing
+
+        FloatCol ->
+            String.toFloat value /= Nothing
+
+        BoolCol ->
+            List.member (String.toLower value)
+                [ "true", "false", "t", "f", "1", "0" ]
+
+        _ ->
+            -- Dates/timestamps/text/uuid/json/etc. are left to the server;
+            -- PostgREST's own error for those is already reasonably clear,
+            -- and FK existence is already validated separately by the
+            -- id-existence pre-check (see CsvUploadLoaded/FetchingIds).
+            True
 
 
 recordId : Table -> Record -> Maybe String

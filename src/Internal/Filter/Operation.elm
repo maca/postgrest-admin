@@ -126,7 +126,10 @@ toPGQuery name op =
                     Operand.chosen enum
             in
             if Set.isEmpty chosen then
-                param PG.null
+                -- Nothing chosen means no filter, not "IS NULL" — an empty
+                -- IN-list has no meaningful SQL translation, and the closest
+                -- one (`param PG.null`) silently hides every non-NULL row.
+                Nothing
 
             else
                 param <| PG.inList PG.string <| Set.toList chosen
@@ -137,11 +140,10 @@ toPGQuery name op =
                     Operand.chosen enum
             in
             if Set.isEmpty chosen then
-                let
-                    choices =
-                        Operand.choices enum
-                in
-                param <| PG.inList PG.string choices
+                -- Nothing excluded means no filter, not "exclude everything
+                -- except NULL" (which is what the all-choices IN-list used
+                -- to produce).
+                Nothing
 
             else
                 param <| PG.not (PG.inList PG.string <| Set.toList chosen)

@@ -567,7 +567,13 @@ changeActionCmd model =
                     |> Maybe.withDefault Cmd.none
 
             _ ->
-                Cmd.none
+                -- A non-root path here means the app just booted straight
+                -- into a deep link (page load/reload), not a Browser.
+                -- application `UrlChanged` (which only fires on *subsequent*
+                -- navigation, never for the initial URL). Without this, the
+                -- schema loads but the listing/detail page is never fetched
+                -- and the content area stays empty forever.
+                Task.succeed () |> Task.perform (always LoadPage)
 
     else
         Task.attempt SchemaFetched
@@ -1180,11 +1186,30 @@ withHost : String -> Config msg -> Config msg
 withHost urlStr (Config conf errors) =
     case Url.fromString urlStr of
         Just u ->
+            let
+                clientAttrs =
+                    (\attrs -> { attrs | host = u })
+                        :: conf.clientAttributes
+
+                -- If the app never calls `withLoginUrl`, the built-in login
+                -- form keeps posting to `defaultHost` (localhost:3000)
+                -- forever. Co-opt `authFormUrl` here too, but only while it
+                -- still holds that untouched default, so an explicit
+                -- `withLoginUrl` call always wins regardless of call order.
+                attributes =
+                    (\model ->
+                        if model.authFormUrl == { defaultHost | path = "/rpc/login" } then
+                            { model | authFormUrl = { u | path = "/rpc/login" } }
+
+                        else
+                            model
+                    )
+                        :: conf.attributes
+            in
             Config
                 { conf
-                    | clientAttributes =
-                        (\attrs -> { attrs | host = u })
-                            :: conf.clientAttributes
+                    | clientAttributes = clientAttrs
+                    , attributes = attributes
                 }
                 errors
 

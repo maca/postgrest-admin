@@ -11,13 +11,14 @@ let
   bluebox = import ./bluebox.nix { inherit pkgs; };
 
   # Fetch pre-built Elm application from GitHub releases
+  # NB: pin an explicit release tag, not /releases/latest, so builds are reproducible.
   elmApp = pkgs.stdenv.mkDerivation {
     pname = "pga-elm";
-    version = "latest";
+    version = "build-11";
 
     src = pkgs.fetchurl {
-      url = "https://github.com/maca/postgrest-admin/releases/latest/download/postgrest-admin.min.js";
-      sha256 = "sha256-AcKJmEihMwsBiiMuWWtSoTsT4D9qjGLQWZLDJJvrBXc=";
+      url = "https://github.com/maca/postgrest-admin/releases/download/build-11/postgrest-admin.min.js";
+      sha256 = "sha256-ZJWbLRN1SaG8yErG5oCki9DyqXA2Udcj9RJNoHbd4sI=";
     };
 
     dontUnpack = true;
