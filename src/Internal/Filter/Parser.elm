@@ -19,7 +19,6 @@ import Parser
         , variable
         )
 import Set exposing (Set)
-import String.Extra exposing (unquote)
 import Url exposing (percentDecode)
 
 
@@ -93,7 +92,7 @@ null =
 
 equals : Parser (OperandConst -> Operation)
 equals =
-    succeed (unquote >> operationCons Equals)
+    succeed (operationCons Equals)
         |. symbol "eq."
         |= value
 
@@ -112,28 +111,28 @@ inThePast =
 
 lesserThan : Parser (OperandConst -> Operation)
 lesserThan =
-    succeed (unquote >> operationCons LesserThan)
+    succeed (operationCons LesserThan)
         |. symbol "lt."
         |= value
 
 
 greaterThan : Parser (OperandConst -> Operation)
 greaterThan =
-    succeed (unquote >> operationCons GreaterThan)
+    succeed (operationCons GreaterThan)
         |. symbol "gt."
         |= value
 
 
 lesserOrEqual : Parser (OperandConst -> Operation)
 lesserOrEqual =
-    succeed (unquote >> operationCons LesserOrEqual)
+    succeed (operationCons LesserOrEqual)
         |. symbol "lte."
         |= value
 
 
 greaterOrEqual : Parser (OperandConst -> Operation)
 greaterOrEqual =
-    succeed (unquote >> operationCons GreaterOrEqual)
+    succeed (operationCons GreaterOrEqual)
         |. symbol "gte."
         |= value
 
