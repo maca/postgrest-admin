@@ -286,6 +286,7 @@ update msg model =
             , AppCmd.batch
                 [ fetchOffset model 0
                 , listingPath { limit = False, selectAll = True, nest = True, offset = 0 } model
+                    |> MountPath.path model.mountPath
                     |> Nav.replaceUrl model.key
                     |> AppCmd.wrap
                 ]
