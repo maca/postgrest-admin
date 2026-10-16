@@ -80,7 +80,7 @@ init table query =
     { table = table
     , filters =
         String.split "&" query
-            |> List.filterMap (Filter.parse table)
+            |> List.concatMap (Filter.parse table)
             |> Array.fromList
     }
 

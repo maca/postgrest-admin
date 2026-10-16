@@ -45,8 +45,8 @@ suite =
             \_ ->
                 Search.init table "and=(int.gte.1,int.lte.10)&text=eq.x"
                     |> filters
-                    |> List.map (filterName >> Just)
-                    |> Expect.equal [ Just "int", Just "text" ]
+                    |> List.map filterName
+                    |> Expect.equal [ "int", "text" ]
         , test "ignores non-filter params" <|
             \_ ->
                 Search.init table "order=name.asc&limit=5"

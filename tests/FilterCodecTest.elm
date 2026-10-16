@@ -18,6 +18,38 @@ suite =
     describe "Filter codec"
         [ describe "serialize >> parse round trip" (List.map roundTrip cases)
         , describe "parse is canonical" (List.map canonical strings)
+        , describe "and= groups keep every condition"
+            [ test "merges a range and keeps the rest" <|
+                \_ ->
+                    Filter.parse table "and=(int.gte.1,int.lte.10,text.eq.x)"
+                        |> Expect.equal
+                            [ Filter.int2 "int" Filter.between "1" "10"
+                            , Filter.text "text" Filter.equals "x"
+                            ]
+            , test "keeps same-column conditions" <|
+                \_ ->
+                    Filter.parse table "and=(text.eq.a,text.eq.b)"
+                        |> Expect.equal
+                            [ Filter.text "text" Filter.equals "a"
+                            , Filter.text "text" Filter.equals "b"
+                            ]
+            , test "keeps unmergeable conditions" <|
+                \_ ->
+                    Filter.parse table "and=(int.gte.1,int.gt.10)"
+                        |> Expect.equal
+                            [ Filter.init "int"
+                                (Filter.greaterOrEqual (Operand.int "1"))
+                            , Filter.init "int"
+                                (Filter.greaterThan (Operand.int "10"))
+                            ]
+            , test "keeps pattern conditions" <|
+                \_ ->
+                    Filter.parse table "and=(text.ilike.*a*,text.ilike.*b*)"
+                        |> Expect.equal
+                            [ Filter.text "text" Filter.contains "a"
+                            , Filter.text "text" Filter.contains "b"
+                            ]
+            ]
         , describe "unrepresentable patterns" <|
             List.map drops
                 [ "text=ilike.*a*b*"
@@ -38,7 +70,7 @@ drops : String -> Test
 drops query =
     test query <|
         \_ ->
-            Filter.parse table query |> Expect.equal Nothing
+            Filter.parse table query |> Expect.equal []
 
 
 roundTrip : Filter -> Test
@@ -46,7 +78,7 @@ roundTrip filter =
     test (Filter.toQueryString filter) <|
         \_ ->
             Filter.parse table (Filter.toQueryString filter)
-                |> Expect.equal (Just filter)
+                |> Expect.equal [ filter ]
 
 
 canonical : String -> Test
@@ -54,15 +86,19 @@ canonical query =
     test query <|
         \_ ->
             let
+                serialize =
+                    List.map Filter.toQueryString >> String.join "&"
+
+                parseAll =
+                    String.split "&" >> List.concatMap (Filter.parse table)
+
                 once =
-                    Filter.parse table query |> Maybe.map Filter.toQueryString
+                    parseAll query
 
                 twice =
-                    once
-                        |> Maybe.andThen (Filter.parse table)
-                        |> Maybe.map Filter.toQueryString
+                    serialize once |> parseAll
             in
-            once |> Expect.equal twice
+            serialize once |> Expect.equal (serialize twice)
 
 
 cases : List Filter
@@ -121,6 +157,7 @@ strings =
     , "status=not.in.(%22draft%22,%22published%22)"
     , "text=ilike.*100%5C%25*"
     , "text=ilike.%5C%25%5C%5F*"
+    , "and=(int.gte.1,int.lte.10,text.eq.x)"
     ]
 
 

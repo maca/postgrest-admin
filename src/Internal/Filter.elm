@@ -31,7 +31,6 @@ module Internal.Filter exposing
     , toQueryString
     )
 
-import Basics.Extra exposing (flip)
 import Dict
 import Internal.Filter.Operand as Operand exposing (Operand)
 import Internal.Filter.Operation as Operation exposing (Operation(..))
@@ -293,7 +292,7 @@ isInThePast name =
 -- Parsing
 
 
-parse : Table -> String -> Maybe Filter
+parse : Table -> String -> List Filter
 parse table query =
     let
         ( name, rawValue ) =
@@ -305,12 +304,16 @@ parse table query =
     if name == "and" then
         Parser.run (list table) value
             |> Result.toMaybe
-            |> Maybe.andThen combineAnd
+            |> Maybe.withDefault []
+            |> List.filterMap identity
+            |> combine
 
     else
         Parser.run (valueFilter table name) value
             |> Result.toMaybe
-            |> Maybe.andThen identity
+            |> Maybe.withDefault Nothing
+            |> Maybe.map List.singleton
+            |> Maybe.withDefault []
 
 
 breakOn : String -> String -> ( String, String )
@@ -368,106 +371,83 @@ columnFilter table =
             ]
 
 
-combineAnd : List (Maybe Filter) -> Maybe Filter
-combineAnd filters =
-    combine [] filters |> List.head
+-- A gte/lte pair presents as Between and a gte/lt pair spanning a midnight
+-- day as InDate; every other condition stays its own filter.
 
 
-combine : List Filter -> List (Maybe Filter) -> List Filter
-combine acc filters =
+combine : List Filter -> List Filter
+combine filters =
     case filters of
         [] ->
-            acc
+            []
 
-        Nothing :: fs ->
-            combine acc fs
+        f :: rest ->
+            case mergeFrom f rest of
+                Just ( merged, remaining ) ->
+                    merged :: combine remaining
 
-        (Just f) :: fs ->
-            let
-                ( rest, combined ) =
-                    fs
-                        |> List.foldl
-                            (\mf ( rem, comb ) ->
-                                case mf of
-                                    Just f_ ->
-                                        combineHelp f f_
-                                            |> Tuple.mapFirst (flip (::) rem)
-                                            |> Tuple.mapSecond (flip (::) comb)
-
-                                    Nothing ->
-                                        ( rem, comb )
-                            )
-                            ( [], [] )
-            in
-            combine (List.filterMap identity combined ++ acc) rest
+                Nothing ->
+                    f :: combine rest
 
 
-combineHelp : Filter -> Filter -> ( Maybe Filter, Maybe Filter )
-combineHelp (Filter name op) ((Filter name_ op_) as f_) =
-    let
-        default =
-            ( Just f_, Nothing )
+mergeFrom : Filter -> List Filter -> Maybe ( Filter, List Filter )
+mergeFrom f rest =
+    case rest of
+        [] ->
+            Nothing
 
-        inDateMapFn min max =
-            let
-                diffIs24H =
-                    posixToMillis max - posixToMillis min == Time.hours24
-            in
-            diffIs24H && toHour utc min == 0
+        f_ :: tail ->
+            case merge f f_ of
+                Just merged ->
+                    Just ( merged, tail )
 
-        makeInDate min max =
-            case ( min, max ) of
-                ( Operand.Time tmin, Operand.Time tmax ) ->
-                    if
-                        Maybe.map2 inDateMapFn
-                            (Time.parse tmin)
-                            (Time.parse tmax)
-                            == Just True
-                    then
-                        ( Nothing
-                        , Just <| time name inDate (String.slice 0 10 tmin)
-                        )
+                Nothing ->
+                    mergeFrom f tail |> Maybe.map (Tuple.mapSecond ((::) f_))
 
-                    else
-                        default
 
-                _ ->
-                    default
-    in
-    if name_ == name then
-        case op of
-            LesserOrEqual max ->
-                case op_ of
-                    GreaterOrEqual min ->
-                        ( Nothing, Just <| Filter name (Between min max) )
-
-                    _ ->
-                        default
-
-            GreaterOrEqual min ->
-                case op_ of
-                    LesserOrEqual max ->
-                        ( Nothing, Just <| Filter name (Between min max) )
-
-                    LesserThan max ->
-                        makeInDate min max
-
-                    _ ->
-                        default
-
-            LesserThan max ->
-                case op_ of
-                    GreaterOrEqual min ->
-                        makeInDate min max
-
-                    _ ->
-                        default
-
-            _ ->
-                default
+merge : Filter -> Filter -> Maybe Filter
+merge (Filter name op) (Filter name_ op_) =
+    if name /= name_ then
+        Nothing
 
     else
-        default
+        case ( op, op_ ) of
+            ( GreaterOrEqual min, LesserOrEqual max ) ->
+                Just <| Filter name (Between min max)
+
+            ( LesserOrEqual max, GreaterOrEqual min ) ->
+                Just <| Filter name (Between min max)
+
+            ( GreaterOrEqual min, LesserThan max ) ->
+                makeInDate name min max
+
+            ( LesserThan max, GreaterOrEqual min ) ->
+                makeInDate name min max
+
+            _ ->
+                Nothing
+
+
+makeInDate : String -> Operand -> Operand -> Maybe Filter
+makeInDate name min max =
+    case ( min, max ) of
+        ( Operand.Time tmin, Operand.Time tmax ) ->
+            let
+                inDateMapFn pmin pmax =
+                    (posixToMillis pmax - posixToMillis pmin == Time.hours24)
+                        && toHour utc pmin == 0
+            in
+            if
+                Maybe.map2 inDateMapFn (Time.parse tmin) (Time.parse tmax)
+                    == Just True
+            then
+                Just <| time name inDate (String.slice 0 10 tmin)
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
 
 
 
