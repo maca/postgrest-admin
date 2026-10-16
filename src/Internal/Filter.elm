@@ -51,6 +51,7 @@ import Postgrest.Client as PG
 import Set exposing (Set)
 import Time exposing (posixToMillis, toHour, utc)
 import Time.Extra as Time
+import Url exposing (percentDecode)
 
 
 type Filter
@@ -294,29 +295,47 @@ isInThePast name =
 
 parse : Table -> String -> Maybe Filter
 parse table query =
-    query
-        |> Parser.run (parseFilter table)
-        |> Result.toMaybe
-        |> Maybe.andThen identity
+    let
+        ( name, rawValue ) =
+            breakOn "=" query
+
+        value =
+            percentDecode rawValue |> Maybe.withDefault rawValue
+    in
+    if name == "and" then
+        Parser.run (list table) value
+            |> Result.toMaybe
+            |> Maybe.andThen combineAnd
+
+    else
+        Parser.run (valueFilter table name) value
+            |> Result.toMaybe
+            |> Maybe.andThen identity
 
 
-parseFilter : Table -> Parser (Maybe Filter)
-parseFilter table =
-    Parser.oneOf
-        [ and table
-        , columnFilter table "="
-        ]
+breakOn : String -> String -> ( String, String )
+breakOn separator string =
+    case String.split separator string of
+        first :: rest ->
+            ( first, String.join separator rest )
+
+        [] ->
+            ( "", "" )
 
 
 
 -- Parse helpers
 
 
-and : Table -> Parser (Maybe Filter)
-and table =
-    succeed combineAnd
-        |. symbol "and="
-        |= list table
+valueFilter : Table -> String -> Parser (Maybe Filter)
+valueFilter table name =
+    succeed (\cons -> cons name)
+        |= Parser.oneOf
+            [ succeed (enumCons table)
+                |= FilterParser.enum
+            , succeed (filterCons table)
+                |= FilterParser.operation False
+            ]
 
 
 list : Table -> Parser (List (Maybe Filter))
@@ -326,13 +345,13 @@ list table =
         , separator = ","
         , end = ")"
         , spaces = Parser.spaces
-        , item = columnFilter table "."
+        , item = columnFilter table
         , trailing = Forbidden
         }
 
 
-columnFilter : Table -> String -> Parser (Maybe Filter)
-columnFilter table separator =
+columnFilter : Table -> Parser (Maybe Filter)
+columnFilter table =
     let
         colNames =
             Dict.keys table.columns
@@ -340,12 +359,12 @@ columnFilter table separator =
     in
     succeed (\name f -> f name)
         |= Parser.oneOf colNames
-        |. symbol separator
+        |. symbol "."
         |= Parser.oneOf
             [ succeed (enumCons table)
                 |= FilterParser.enum
             , succeed (filterCons table)
-                |= FilterParser.operation
+                |= FilterParser.operation True
             ]
 
 

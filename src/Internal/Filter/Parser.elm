@@ -19,27 +19,26 @@ import Parser
         , variable
         )
 import Set exposing (Set)
-import Url exposing (percentDecode)
 
 
 type alias OperandConst =
     String -> Operand
 
 
-operation : Parser (OperandConst -> Operation)
-operation =
+operation : Bool -> Parser (OperandConst -> Operation)
+operation isItem =
     Parser.oneOf
         [ contains
-        , endsWith
+        , endsWith isItem
         , startsWith
         , is
-        , equals
+        , equals isItem
         , inTheFuture
         , inThePast
-        , lesserThan
-        , greaterThan
-        , lesserOrEqual
-        , greaterOrEqual
+        , lesserThan isItem
+        , greaterThan isItem
+        , lesserOrEqual isItem
+        , greaterOrEqual isItem
         ]
 
 
@@ -52,12 +51,12 @@ contains =
         |> backtrackable
 
 
-endsWith : Parser (OperandConst -> Operation)
-endsWith =
+endsWith : Bool -> Parser (OperandConst -> Operation)
+endsWith isItem =
     succeed (operationCons EndsWith)
         |. symbol "ilike."
         |. symbol "*"
-        |= value
+        |= value isItem
         |> backtrackable
 
 
@@ -90,11 +89,11 @@ null =
     succeed (always (IsNull Nothing)) |. symbol "null"
 
 
-equals : Parser (OperandConst -> Operation)
-equals =
+equals : Bool -> Parser (OperandConst -> Operation)
+equals isItem =
     succeed (operationCons Equals)
         |. symbol "eq."
-        |= value
+        |= value isItem
 
 
 inTheFuture : Parser (OperandConst -> Operation)
@@ -109,32 +108,32 @@ inThePast =
         |. symbol "lt.now"
 
 
-lesserThan : Parser (OperandConst -> Operation)
-lesserThan =
+lesserThan : Bool -> Parser (OperandConst -> Operation)
+lesserThan isItem =
     succeed (operationCons LesserThan)
         |. symbol "lt."
-        |= value
+        |= value isItem
 
 
-greaterThan : Parser (OperandConst -> Operation)
-greaterThan =
+greaterThan : Bool -> Parser (OperandConst -> Operation)
+greaterThan isItem =
     succeed (operationCons GreaterThan)
         |. symbol "gt."
-        |= value
+        |= value isItem
 
 
-lesserOrEqual : Parser (OperandConst -> Operation)
-lesserOrEqual =
+lesserOrEqual : Bool -> Parser (OperandConst -> Operation)
+lesserOrEqual isItem =
     succeed (operationCons LesserOrEqual)
         |. symbol "lte."
-        |= value
+        |= value isItem
 
 
-greaterOrEqual : Parser (OperandConst -> Operation)
-greaterOrEqual =
+greaterOrEqual : Bool -> Parser (OperandConst -> Operation)
+greaterOrEqual isItem =
     succeed (operationCons GreaterOrEqual)
         |. symbol "gte."
-        |= value
+        |= value isItem
 
 
 enum : Parser (List String -> Operation)
@@ -197,13 +196,17 @@ stringHelp delimiter =
         ]
 
 
-value : Parser String
-value =
+value : Bool -> Parser String
+value isItem =
     let
         exclude =
-            [ ',', ')' ]
+            if isItem then
+                [ ',', ')' ]
+
+            else
+                []
     in
-    succeed (percentDecode >> Maybe.withDefault "")
+    succeed identity
         |= (succeed ()
                 |. chompWhile (\c -> List.member c exclude |> not)
                 |> getChompedString
@@ -212,8 +215,7 @@ value =
 
 getUntil : String -> Parser String
 getUntil terminator =
-    succeed (percentDecode >> Maybe.withDefault "")
-        |= (getChompedString <| succeed () |. chompUntil terminator)
+    getChompedString <| succeed () |. chompUntil terminator
 
 
 operationCons : (Operand -> Operation) -> String -> OperandConst -> Operation

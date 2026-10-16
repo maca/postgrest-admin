@@ -70,6 +70,7 @@ import Url exposing (Protocol(..), Url)
 {-| -}
 type alias Model =
     { appUrl : AppUrl
+    , query : Maybe String
     , baseUrl : { protocol : Protocol, host : String, port_ : Maybe Int }
     , key : Nav.Key
     , notification : Notification
@@ -273,6 +274,7 @@ initModel : Url -> Nav.Key -> Config msg -> ( Model, Cmd Msg )
 initModel url key config =
     applyConfiguration config
         { appUrl = AppUrl.fromUrl url
+        , query = url.query
         , baseUrl = { protocol = url.protocol, host = url.host, port_ = url.port_ }
         , key = key
         , notification = NoNotification
@@ -510,20 +512,25 @@ update config msg ({ client } as model) =
             ( model, Nav.load href )
 
         UrlChanged url ->
+            let
+                updated =
+                    { model
+                        | appUrl = AppUrl.fromUrl url
+                        , query = url.query
+                        , baseUrl =
+                            { protocol = url.protocol
+                            , host = url.host
+                            , port_ = url.port_
+                            }
+                    }
+            in
             if (currentUrl model).path /= url.path then
-                ( { model
-                    | appUrl = AppUrl.fromUrl url
-                    , baseUrl =
-                        { protocol = url.protocol
-                        , host = url.host
-                        , port_ = url.port_
-                        }
-                  }
+                ( updated
                 , Task.succeed () |> Task.perform (always LoadPage)
                 )
 
             else
-                ( model, Cmd.none )
+                ( updated, Cmd.none )
 
         LoadPage ->
             initPageModels config model
@@ -1031,19 +1038,7 @@ currentUrl model =
     , host = model.baseUrl.host
     , port_ = model.baseUrl.port_
     , path = "/" ++ String.join "/" model.appUrl.path
-    , query =
-        if Dict.isEmpty model.appUrl.queryParameters then
-            Nothing
-
-        else
-            model.appUrl.queryParameters
-                |> Dict.toList
-                |> List.concatMap
-                    (\( key, values ) ->
-                        List.map (\value -> key ++ "=" ++ value) values
-                    )
-                |> String.join "&"
-                |> Just
+    , query = model.query
     , fragment = model.appUrl.fragment
     }
 

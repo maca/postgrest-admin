@@ -47,7 +47,6 @@ import Json.Decode as Decode
 import Postgrest.Client as PG
 import Set
 import String.Extra as String
-import Url exposing (percentDecode)
 
 
 type Msg
@@ -81,8 +80,7 @@ init table query =
     { table = table
     , filters =
         String.split "&" query
-            |> List.filterMap
-                (percentDecode >> Maybe.andThen (Filter.parse table))
+            |> List.filterMap (Filter.parse table)
             |> Array.fromList
     }
 
