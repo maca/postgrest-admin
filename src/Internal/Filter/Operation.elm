@@ -71,20 +71,13 @@ toPGQuery name op =
                     (\s -> param <| PG.value <| PG.string <| "gte." ++ s)
 
         Contains operand ->
-            Operand.value operand
-                |> String.nonEmpty
-                |> Maybe.andThen
-                    (\a -> param <| PG.ilike <| "*" ++ a ++ "*")
+            patternParam name "*" "*" operand
 
         StartsWith operand ->
-            Operand.value operand
-                |> String.nonEmpty
-                |> Maybe.andThen (\a -> param <| PG.ilike <| a ++ "*")
+            patternParam name "" "*" operand
 
         EndsWith operand ->
-            Operand.value operand
-                |> String.nonEmpty
-                |> Maybe.andThen (\a -> param <| PG.ilike <| "*" ++ a)
+            patternParam name "*" "" operand
 
         Between operandA operandB ->
             let
@@ -162,6 +155,32 @@ toPGQuery name op =
 
         IsInThePast _ ->
             param <| PG.value <| PG.string <| "lt.now"
+
+
+-- LIKE patterns: PostgREST rewrites `*` to `%` blindly (even escaped), and
+-- `%`/`_` are SQL wildcards, so `\ % _` must be escaped and `*` is
+-- unrepresentable in operand values.
+
+
+patternParam : String -> String -> String -> Operand -> Maybe PG.Param
+patternParam name prefix suffix operand =
+    Operand.value operand
+        |> String.nonEmpty
+        |> Maybe.andThen escapeLike
+        |> Maybe.map (\escaped -> PG.param name <| PG.ilike <| prefix ++ escaped ++ suffix)
+
+
+escapeLike : String -> Maybe String
+escapeLike value =
+    if String.contains "*" value then
+        Nothing
+
+    else
+        value
+            |> String.replace "\\" "\\\\"
+            |> String.replace "%" "\\%"
+            |> String.replace "_" "\\_"
+            |> Just
 
 
 toString : Operation -> String

@@ -28,9 +28,7 @@ type alias OperandConst =
 operation : Bool -> Parser (OperandConst -> Operation)
 operation isItem =
     Parser.oneOf
-        [ contains
-        , endsWith isItem
-        , startsWith
+        [ pattern isItem
         , is
         , equals isItem
         , inTheFuture
@@ -42,29 +40,130 @@ operation isItem =
         ]
 
 
-contains : Parser (OperandConst -> Operation)
-contains =
-    succeed (operationCons Contains)
+{-| Pattern operands are read whole, then classified by their unescaped
+leading/trailing `*`. `\*` unescapes to `%` — PostgREST rewrites `*` to `%`
+even when backslash-escaped, so a literal `*` is unrepresentable.
+-}
+pattern : Bool -> Parser (OperandConst -> Operation)
+pattern isItem =
+    succeed identity
         |. symbol "ilike."
-        |. symbol "*"
-        |= getUntil "*"
-        |> backtrackable
+        |= (value isItem |> Parser.andThen classify)
 
 
-endsWith : Bool -> Parser (OperandConst -> Operation)
-endsWith isItem =
-    succeed (operationCons EndsWith)
-        |. symbol "ilike."
-        |. symbol "*"
-        |= value isItem
-        |> backtrackable
+classify : String -> Parser (OperandConst -> Operation)
+classify raw =
+    patternOperation raw
+        |> Maybe.map succeed
+        |> Maybe.withDefault (Parser.problem "pattern not representable as a filter")
 
 
-startsWith : Parser (OperandConst -> Operation)
-startsWith =
-    succeed (operationCons StartsWith)
-        |. symbol "ilike."
-        |= getUntil "*"
+patternOperation : String -> Maybe (OperandConst -> Operation)
+patternOperation raw =
+    let
+        ( leading, inner1 ) =
+            unconsUnescaped '*' raw
+
+        ( trailing, inner ) =
+            unsnocUnescaped '*' inner1
+    in
+    if String.isEmpty raw || hasUnescapedStar inner then
+        Nothing
+
+    else
+        case ( leading, trailing ) of
+            ( True, True ) ->
+                Just <| operationCons Contains (unescape inner)
+
+            ( False, True ) ->
+                Just <| operationCons StartsWith (unescape inner)
+
+            ( True, False ) ->
+                Just <| operationCons EndsWith (unescape inner)
+
+            ( False, False ) ->
+                Nothing
+
+
+unconsUnescaped : Char -> String -> ( Bool, String )
+unconsUnescaped char str =
+    case String.uncons str of
+        Just ( c, rest ) ->
+            ( c == char, if c == char then rest else str )
+
+        Nothing ->
+            ( False, str )
+
+
+unsnocUnescaped : Char -> String -> ( Bool, String )
+unsnocUnescaped char str =
+    let
+        before =
+            String.dropRight 1 str
+    in
+    if
+        String.right 1 str
+            == String.fromChar char
+            && (modBy 2 (countTrailing before) == 0)
+    then
+        ( True, before )
+
+    else
+        ( False, str )
+
+
+countTrailing : String -> Int
+countTrailing str =
+    if String.endsWith "\\" str then
+        1 + countTrailing (String.dropRight 1 str)
+
+    else
+        0
+
+
+hasUnescapedStar : String -> Bool
+hasUnescapedStar str =
+    case String.uncons str of
+        Just ( '\\', rest ) ->
+            case String.uncons rest of
+                Just ( _, rest2 ) ->
+                    hasUnescapedStar rest2
+
+                Nothing ->
+                    False
+
+        Just ( '*', _ ) ->
+            True
+
+        Just ( _, rest ) ->
+            hasUnescapedStar rest
+
+        Nothing ->
+            False
+
+
+unescape : String -> String
+unescape str =
+    case String.uncons str of
+        Just ( '\\', rest ) ->
+            case String.uncons rest of
+                Just ( c, rest2 ) ->
+                    (if c == '*' then
+                        "%"
+
+                     else
+                        String.fromChar c
+                    )
+                        ++ unescape rest2
+
+                Nothing ->
+                    "\\"
+
+        Just ( c, rest ) ->
+            String.fromChar c ++ unescape rest
+
+        Nothing ->
+            ""
 
 
 is : Parser (OperandConst -> Operation)
@@ -211,11 +310,6 @@ value isItem =
                 |. chompWhile (\c -> List.member c exclude |> not)
                 |> getChompedString
            )
-
-
-getUntil : String -> Parser String
-getUntil terminator =
-    getChompedString <| succeed () |. chompUntil terminator
 
 
 operationCons : (Operand -> Operation) -> String -> OperandConst -> Operation

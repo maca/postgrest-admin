@@ -524,13 +524,13 @@ input name idx op =
             input_ Equals a []
 
         Contains a ->
-            input_ Contains a []
+            input_ (Contains << noStars) a []
 
         StartsWith a ->
-            input_ StartsWith a []
+            input_ (StartsWith << noStars) a []
 
         EndsWith a ->
-            input_ EndsWith a []
+            input_ (EndsWith << noStars) a []
 
         LesserThan a ->
             input_ LesserThan a []
@@ -574,6 +574,14 @@ input name idx op =
 
         IsInThePast _ ->
             Html.text ""
+
+
+-- A literal `*` cannot be expressed in a PostgREST pattern (it is the
+-- wildcard and escaping does not survive the server's rewrite), so pattern
+-- operands never take one.
+noStars : Operand -> Operand
+noStars operand =
+    Operand.constructor operand (String.replace "*" "" (Operand.value operand))
 
 
 textInput : List (Attribute Msg) -> (Operand -> Msg) -> Operand -> Html Msg

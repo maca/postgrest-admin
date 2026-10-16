@@ -18,7 +18,27 @@ suite =
     describe "Filter codec"
         [ describe "serialize >> parse round trip" (List.map roundTrip cases)
         , describe "parse is canonical" (List.map canonical strings)
+        , describe "unrepresentable patterns" <|
+            List.map drops
+                [ "text=ilike.*a*b*"
+                , "text=ilike.a"
+                , "text=ilike."
+                , "text=ilike.%5C%2A"
+                ]
+                ++ [ test "a * in the value is not serialized" <|
+                        \_ ->
+                            Filter.text "text" Filter.contains "a*b"
+                                |> Filter.toQueryString
+                                |> Expect.equal ""
+                   ]
         ]
+
+
+drops : String -> Test
+drops query =
+    test query <|
+        \_ ->
+            Filter.parse table query |> Expect.equal Nothing
 
 
 roundTrip : Filter -> Test
@@ -60,6 +80,12 @@ cases =
     , Filter.text "text" Filter.equals "\"hello\""
     , Filter.text "text" Filter.equals "say \"hi\" now"
     , Filter.text "text" Filter.contains "bar baz"
+    , Filter.text "text" Filter.contains "100%"
+    , Filter.text "text" Filter.contains "a_b"
+    , Filter.text "text" Filter.contains "a,b"
+    , Filter.text "text" Filter.contains "back\\slash"
+    , Filter.text "text" Filter.startsWith "50%"
+    , Filter.text "text" Filter.endsWith "a%b"
     , Filter.text "text" Filter.startsWith "bar baz"
     , Filter.text "text" Filter.endsWith "bar baz"
     , Filter.init "int" (Filter.equals (Operand.int "5"))
@@ -93,6 +119,8 @@ strings =
     , "time=lt.now"
     , "status=in.(%22draft%22,%22published%22)"
     , "status=not.in.(%22draft%22,%22published%22)"
+    , "text=ilike.*100%5C%25*"
+    , "text=ilike.%5C%25%5C%5F*"
     ]
 
 
