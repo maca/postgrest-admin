@@ -89,6 +89,8 @@ suite =
                 , "text=ilike.a"
                 , "text=ilike."
                 , "text=ilike.%5C%2A"
+                , "text=ilike.*100%25*"
+                , "text=ilike.*a_b*"
                 ]
                 ++ [ test "a * in the value is not serialized" <|
                         \_ ->

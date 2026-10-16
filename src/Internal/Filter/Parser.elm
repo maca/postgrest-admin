@@ -67,7 +67,7 @@ patternOperation raw =
         ( trailing, inner ) =
             unsnocUnescaped '*' inner1
     in
-    if String.isEmpty raw || hasUnescapedStar inner then
+    if String.isEmpty raw || hasUnescapedMeta inner then
         Nothing
 
     else
@@ -121,22 +121,24 @@ countTrailing str =
         0
 
 
-hasUnescapedStar : String -> Bool
-hasUnescapedStar str =
+{-| A core with unescaped `%`, `_` or `*` is a wildcard pattern the UI
+cannot express (operand values are literal text) — PostgREST would match
+more than any filter row could show.
+-}
+hasUnescapedMeta : String -> Bool
+hasUnescapedMeta str =
     case String.uncons str of
         Just ( '\\', rest ) ->
             case String.uncons rest of
                 Just ( _, rest2 ) ->
-                    hasUnescapedStar rest2
+                    hasUnescapedMeta rest2
 
                 Nothing ->
                     False
 
-        Just ( '*', _ ) ->
-            True
-
-        Just ( _, rest ) ->
-            hasUnescapedStar rest
+        Just ( c, rest ) ->
+            (c == '*' || c == '%' || c == '_')
+                || hasUnescapedMeta rest
 
         Nothing ->
             False
