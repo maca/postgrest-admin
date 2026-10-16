@@ -266,7 +266,7 @@ item =
         , succeed identity
             |= variable
                 { start = always True
-                , inner = (/=) ','
+                , inner = \c -> c /= ',' && c /= ')'
                 , reserved = Set.empty
                 }
         ]

@@ -72,17 +72,43 @@ type alias Options =
 type alias Search =
     { table : Table
     , filters : Array Filter
+    , dropped : List String
     }
 
 
 init : Table -> String -> Search
 init table query =
+    let
+        parsed =
+            String.split "&" query
+                |> List.map (\piece -> ( piece, Filter.parse table piece ))
+    in
     { table = table
     , filters =
-        String.split "&" query
-            |> List.concatMap (Filter.parse table)
+        parsed
+            |> List.concatMap Tuple.second
             |> Array.fromList
+    , dropped =
+        parsed
+            |> List.filterMap
+                (\( piece, filters ) ->
+                    if List.isEmpty filters && not (modeled piece) then
+                        Just piece
+
+                    else
+                        Nothing
+                )
     }
+
+
+{-| Order and select are modeled elsewhere; everything else that fails to
+parse is a param with no representation and gets reported.
+-}
+modeled : String -> Bool
+modeled piece =
+    piece == ""
+        || String.startsWith "order=" piece
+        || String.startsWith "select=" piece
 
 
 isApplyMsg : Msg -> Bool

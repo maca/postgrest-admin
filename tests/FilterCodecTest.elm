@@ -50,6 +50,39 @@ suite =
                             , Filter.text "text" Filter.contains "b"
                             ]
             ]
+        , describe "parse-back for the filter vocabulary"
+            [ test "unquoted in-list items" <|
+                \_ ->
+                    Filter.parse table "status=in.(draft,published)"
+                        |> List.map Filter.toQueryString
+                        |> Expect.equal [ "status=in.(\"draft\",\"published\")" ]
+            , test "single unquoted in-list item" <|
+                \_ ->
+                    Filter.parse table "status=in.(draft)"
+                        |> List.map Filter.toQueryString
+                        |> Expect.equal [ "status=in.(\"draft\")" ]
+            , test "enum columns keep is.null" <|
+                \_ ->
+                    Filter.parse table "status=is.null"
+                        |> List.map Filter.toQueryString
+                        |> Expect.equal [ "status=is.null" ]
+            , test "enum columns drop other operators" <|
+                \_ ->
+                    Filter.parse table "status=eq.x" |> Expect.equal []
+            , test "blank operands are not filters" <|
+                \_ ->
+                    Filter.parse table "text=eq." |> Expect.equal []
+            , test "empty in-lists are not filters" <|
+                \_ ->
+                    Filter.parse table "status=in.()" |> Expect.equal []
+            , test "a blank condition drops only itself" <|
+                \_ ->
+                    Filter.parse table "and=(text.eq.,int.gte.1)"
+                        |> Expect.equal
+                            [ Filter.init "int"
+                                (Filter.greaterOrEqual (Operand.int "1"))
+                            ]
+            ]
         , describe "unrepresentable patterns" <|
             List.map drops
                 [ "text=ilike.*a*b*"
@@ -158,6 +191,8 @@ strings =
     , "text=ilike.*100%5C%25*"
     , "text=ilike.%5C%25%5C%5F*"
     , "and=(int.gte.1,int.lte.10,text.eq.x)"
+    , "status=in.(draft,published)"
+    , "status=in.(draft)"
     ]
 
 

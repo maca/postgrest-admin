@@ -138,9 +138,6 @@ fromColumn colName col =
         DateCol ->
             Just (date colName inDate "")
 
-        JsonCol ->
-            Just (text colName equals "")
-
         _ ->
             Nothing
 
@@ -307,6 +304,7 @@ parse table query =
             |> Maybe.withDefault []
             |> List.filterMap identity
             |> combine
+            |> List.filter applied
 
     else
         Parser.run (valueFilter table name) value
@@ -314,6 +312,15 @@ parse table query =
             |> Maybe.withDefault Nothing
             |> Maybe.map List.singleton
             |> Maybe.withDefault []
+            |> List.filter applied
+
+
+{-| A filter that serializes to nothing is not a filter — blank operands and
+empty in-lists are dropped so state and query never disagree.
+-}
+applied : Filter -> Bool
+applied =
+    not << String.isEmpty << toQueryString
 
 
 breakOn : String -> String -> ( String, String )
@@ -474,12 +481,20 @@ filterCons table operationCons name =
                                                     Nothing
                                         )
                         in
-                        if not (List.isEmpty enumChoices) then
-                            IsNull (Just <| NoneOf <| Operand.enum enumChoices Set.empty)
-                                |> (Just << Filter name)
+                        if List.isEmpty enumChoices then
+                            Just <| Filter name <| operationCons Operand.text
 
                         else
-                            Just <| Filter name <| operationCons Operand.text
+                            -- Enum columns only take in./not.in. (via
+                            -- enumCons) and is.null; anything else has no UI
+                            -- filter and is dropped rather than rewritten.
+                            case operationCons Operand.text of
+                                IsNull _ ->
+                                    IsNull (Just <| NoneOf <| Operand.enum enumChoices Set.empty)
+                                        |> (Just << Filter name)
+
+                                _ ->
+                                    Nothing
 
                     TextCol ->
                         Just <| Filter name <| operationCons Operand.text

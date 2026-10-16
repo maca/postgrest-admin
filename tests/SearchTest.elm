@@ -52,6 +52,16 @@ suite =
                 Search.init table "order=name.asc&limit=5"
                     |> filters
                     |> Expect.equal []
+        , test "reports params with no representation" <|
+            \_ ->
+                Search.init table "text=eq.a&order=name.asc&select=x&limit=5&name=neq.x"
+                    |> .dropped
+                    |> Expect.equal [ "limit=5", "name=neq.x" ]
+        , test "nothing to report on canonical queries" <|
+            \_ ->
+                Search.init table "text=eq.a&order=name.asc"
+                    |> .dropped
+                    |> Expect.equal []
         ]
 
 

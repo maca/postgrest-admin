@@ -21,7 +21,9 @@ import Html.Attributes as Attrs
 import Html.Events as Events
 import Http
 import Inflect
+import Array
 import Internal.Cmd as AppCmd exposing (AppCmd)
+import Internal.Filter as Filter
 import Internal.Schema as Schema exposing (Column, ColumnType(..), Record, Table)
 import Internal.Search as Search exposing (Search)
 import Json.Decode as Decode
@@ -141,13 +143,57 @@ init :
     -> ( Model, AppCmd Msg )
 init { client, mountPath, table, parent, recordsPerPage } url key =
     let
-        order =
+        orderParams =
             Maybe.map parseQuery url.query
                 |> Maybe.withDefault []
                 |> List.filter (Tuple.first >> (==) "order")
+                |> List.map Tuple.second
+
+        order =
+            orderParams
                 |> List.head
-                |> Maybe.map (Tuple.second >> parseOrder)
+                |> Maybe.map parseOrder
                 |> Maybe.withDefault Unordered
+
+        rawSearch =
+            Search.init table (url.query |> Maybe.withDefault "")
+
+        scopeParam =
+            parentReference table parent
+                |> Maybe.map
+                    (\( col, id ) ->
+                        PG.toQueryString [ PG.param col (PG.eq (PG.string id)) ]
+                    )
+
+        search =
+            case scopeParam of
+                Just scope ->
+                    { rawSearch
+                        | filters =
+                            Array.filter
+                                (\filter -> Filter.toQueryString filter /= scope)
+                                rawSearch.filters
+                    }
+
+                Nothing ->
+                    rawSearch
+
+        orderDropped =
+            case orderParams of
+                first :: rest ->
+                    (if not (String.isEmpty first) && parseOrder first == Unordered then
+                        [ "order=" ++ first ]
+
+                     else
+                        []
+                    )
+                        ++ List.map ((++) "order=") rest
+
+                [] ->
+                    []
+
+        dropped =
+            search.dropped ++ orderDropped
 
         model =
             { client = client
@@ -163,12 +209,21 @@ init { client, mountPath, table, parent, recordsPerPage } url key =
             , scrollPosition = 0
             , pages = [ Unloaded 0 ]
             , order = order
-            , search = Search.init table (url.query |> Maybe.withDefault "")
+            , search = search
             , searchOpen = True
             , uploadState = Idle
             , recordsPerPage = recordsPerPage
             , requested = Set.empty
             }
+
+        canonical =
+            listingPath { limit = False, selectAll = True, nest = True, offset = 0 } model
+
+        canonicalQuery =
+            canonical
+                |> String.split "?"
+                |> List.drop 1
+                |> String.join "?"
     in
     ( model
     , AppCmd.batch
@@ -181,6 +236,20 @@ init { client, mountPath, table, parent, recordsPerPage } url key =
                     >> AppCmd.wrap
                 )
             |> Maybe.withDefault AppCmd.none
+        , if (url.query |> Maybe.withDefault "") == canonicalQuery then
+            AppCmd.none
+
+          else
+            Nav.replaceUrl key (MountPath.path mountPath canonical)
+                |> AppCmd.wrap
+        , if List.isEmpty dropped then
+            AppCmd.none
+
+          else
+            AppCmd.error
+                ("Removed query params with no filter representation: "
+                    ++ String.join ", " dropped
+                )
         ]
     )
 
