@@ -91,34 +91,54 @@ adminAppParams :
     , apiHost : String
     , jwt : Maybe String
     }
-    -> PostgRestAdmin.AppParams Model Msg
+    ->
+        { init : Decode.Value -> Url -> Nav.Key -> ( Model, Cmd Msg )
+        , view : Model -> Html Msg
+        , update : PostgRestAdmin.Msg -> Model -> ( Model, Cmd Msg )
+        , subscriptions : Model -> Sub Msg
+        , onUrlRequest : Browser.UrlRequest -> Msg
+        , onUrlChange : Url -> Msg
+        }
 adminAppParams params =
-    PostgRestAdmin.configure
-        |> PostgRestAdmin.withHost params.apiHost
-        |> (params.jwt
-                |> Maybe.map PostgRestAdmin.withJWT
-                |> Maybe.withDefault identity
-           )
-        |> PostgRestAdmin.withClientHeaders
-            [ Http.header "Accept-Profile" "bluebox"
-            , Http.header "Content-Profile" "bluebox"
-            ]
-        |> PostgRestAdmin.onLogin loggedIn
-        |> PostgRestAdmin.onLogout loggedOut
-        |> PostgRestAdmin.buildAppParams
-            { toInnerModel = .adminAppModel
-            , toOuterModel = \app model -> { model | adminAppModel = app }
-            , toOuterMsg = AdminAppChanged
-            , initModel =
-                \_ app ->
-                    { adminAppModel = app
-                    , authFormFields =
-                        params.formFields
-                            |> Maybe.withDefault
-                                (authForm (hostParams app))
-                    , authError = Nothing
-                    }
-            }
+    let
+        config =
+            PostgRestAdmin.configure
+                |> PostgRestAdmin.withHost params.apiHost
+                |> (params.jwt
+                        |> Maybe.map PostgRestAdmin.withJWT
+                        |> Maybe.withDefault identity
+                   )
+                |> PostgRestAdmin.withClientHeaders
+                    [ Http.header "Accept-Profile" "bluebox"
+                    , Http.header "Content-Profile" "bluebox"
+                    ]
+                |> PostgRestAdmin.onLogin loggedIn
+                |> PostgRestAdmin.onLogout loggedOut
+
+        appParams =
+            PostgRestAdmin.buildAppParams
+                { toInnerModel = .adminAppModel
+                , toOuterModel = \app model -> { model | adminAppModel = app }
+                , toOuterMsg = AdminAppChanged
+                , initModel =
+                    \_ app ->
+                        { adminAppModel = app
+                        , authFormFields =
+                            params.formFields
+                                |> Maybe.withDefault
+                                    (authForm (hostParams app))
+                        , authError = Nothing
+                        }
+                }
+                config
+    in
+    { init = appParams.init config
+    , view = appParams.view
+    , update = appParams.update
+    , subscriptions = appParams.subscriptions
+    , onUrlRequest = appParams.onUrlRequest
+    , onUrlChange = appParams.onUrlChange
+    }
 
 
 hostParams : PostgRestAdmin.Model -> { apiHost : String, authEndpointUrl : String }
